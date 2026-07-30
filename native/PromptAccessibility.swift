@@ -23,6 +23,7 @@ private let pasteVerificationTimeout: TimeInterval = 3.0
 
 private struct ReplaceRequest: Decodable {
     let expectedOriginalText: String
+    let expectedTargetFingerprint: String
     let replacementText: String
     let restoreClipboard: Bool?
 }
@@ -33,6 +34,8 @@ private struct FocusedTextArea {
     let element: AXUIElement
     let application: NSRunningApplication
     let text: String
+    let targetFingerprint: String
+    let selectionMode: ComposerSelectionMode
 }
 
 private struct PasteboardRepresentation {
@@ -320,6 +323,13 @@ private struct ComposerCandidate {
     let score: Int
     let reasons: [String]
     let frame: CGRect?
+    let validation: ComposerValidationResult
+}
+
+private struct ComposerSemanticMetadata {
+    let context: String
+    let rolePath: [String]
+    let identifiers: [String]
 }
 
 private let maximumWindowTraversalDepth = 24
@@ -489,25 +499,36 @@ private func nearestWritableTextArea(
     return nil
 }
 
-private func semanticContext(
+private func semanticMetadata(
     for element: AXUIElement,
     maximumDepth: Int = 7
-) -> String {
+) -> ComposerSemanticMetadata {
     let semanticAttributes: [CFString] = [
         "AXTitle" as CFString,
         "AXDescription" as CFString,
-        "AXIdentifier" as CFString,
         "AXHelp" as CFString,
-        "AXPlaceholderValue" as CFString,
+        "AXPlaceholderValue" as CFString
+    ]
+    let identifierAttributes: [CFString] = [
+        "AXIdentifier" as CFString,
         "AXDOMIdentifier" as CFString
     ]
 
     var parts: [String] = []
+    var rolePath: [String] = []
+    var identifiers: [String] = []
     var current: AXUIElement? = element
 
-    for _ in 0...maximumDepth {
+    for depth in 0...maximumDepth {
         guard let currentElement = current else {
             break
+        }
+
+        if let role = stringAttribute(
+            currentElement,
+            kAXRoleAttribute as CFString
+        ) {
+            rolePath.append(role)
         }
 
         for attribute in semanticAttributes {
@@ -522,15 +543,34 @@ private func semanticContext(
             }
         }
 
+        for attribute in identifierAttributes {
+            if
+                let value = stringAttribute(
+                    currentElement,
+                    attribute
+                ),
+                !value.isEmpty
+            {
+                parts.append(value)
+                identifiers.append(
+                    "\(depth):\(attribute):\(value)"
+                )
+            }
+        }
+
         current = elementAttribute(
             currentElement,
             kAXParentAttribute as CFString
         )
     }
 
-    return parts
-        .joined(separator: " ")
-        .lowercased()
+    return ComposerSemanticMetadata(
+        context: parts
+            .joined(separator: " ")
+            .lowercased(),
+        rolePath: rolePath,
+        identifiers: identifiers
+    )
 }
 
 private func makeComposerCandidate(
@@ -596,9 +636,10 @@ private func makeComposerCandidate(
         reasons.append("non-empty")
     }
 
-    let context = semanticContext(
+    let metadata = semanticMetadata(
         for: element
     )
+    let context = metadata.context
 
     let positiveSignals: [
         (keyword: String, points: Int)
@@ -707,11 +748,31 @@ private func makeComposerCandidate(
         }
     }
 
+    let validation = validateComposer(
+        ComposerValidationInput(
+            role: kAXTextAreaRole as String,
+            valueReadable: true,
+            selectionSettable: isAttributeSettable(
+                element,
+                kAXSelectedTextRangeAttribute as CFString
+            ),
+            enabled: boolAttribute(
+                element,
+                kAXEnabledAttribute as CFString
+            ),
+            semanticContext: context,
+            frame: frame,
+            windowFrame: windowFrame
+        ),
+        mode: .fallback
+    )
+
     return ComposerCandidate(
         element: element,
         score: score,
         reasons: reasons,
-        frame: frame
+        frame: frame,
+        validation: validation
     )
 }
 
@@ -830,6 +891,7 @@ private func candidateDiagnostic(
 
     return [
         "score=\(candidate.score)",
+        "validation=\(candidate.validation.code)",
         "reasons=\(candidate.reasons.joined(separator: ","))",
         frameDescription
     ].joined(separator: " ")
@@ -875,14 +937,19 @@ private func findCodexComposerInFocusedWindow(
         .prefix(10)
         .map(candidateDiagnostic)
 
-    let eligibleCandidates =
-        candidates.filter {
-            $0.score >= minimumComposerScore
-        }
+    let selection = selectComposerCandidate(
+        candidates.map {
+            ComposerCandidateRank(
+                score: $0.score,
+                isEligible: $0.validation.isEligible
+            )
+        },
+        minimumScore: minimumComposerScore,
+        minimumMargin: minimumComposerScoreMargin
+    )
 
-    guard let bestCandidate =
-        eligibleCandidates.first
-    else {
+    switch selection {
+    case .none:
         return (
             nil,
             [
@@ -891,37 +958,112 @@ private func findCodexComposerInFocusedWindow(
                     + "\(candidates.count)"
             ] + diagnostics
         )
+
+    case .ambiguous:
+        return (
+            nil,
+            [
+                "composer search was ambiguous"
+            ] + diagnostics
+        )
+
+    case .selected(let index):
+        return (
+            candidates[index].element,
+            diagnostics
+        )
+    }
+}
+
+private func focusedWindowElement(
+    applicationElement: AXUIElement
+) -> AXUIElement? {
+    let result = copyAttribute(
+        applicationElement,
+        kAXFocusedWindowAttribute as CFString
+    )
+
+    guard
+        result.error == .success,
+        let rawValue = result.value,
+        CFGetTypeID(rawValue)
+            == AXUIElementGetTypeID()
+    else {
+        return nil
     }
 
-    if eligibleCandidates.count >= 2 {
-        let runnerUp =
-            eligibleCandidates[1]
+    return (rawValue as! AXUIElement)
+}
 
-        let margin =
-            bestCandidate.score
-            - runnerUp.score
+private func validatedFocusedTextArea(
+    element: AXUIElement,
+    application: NSRunningApplication,
+    applicationElement: AXUIElement,
+    text: String,
+    selectionMode: ComposerSelectionMode
+) -> FocusedTextArea {
+    let metadata = semanticMetadata(
+        for: element
+    )
+    let windowFrame = focusedWindowElement(
+        applicationElement: applicationElement
+    ).flatMap(elementFrame)
+    let frame = elementFrame(element)
+    let role = stringAttribute(
+        element,
+        kAXRoleAttribute as CFString
+    ) ?? "<unknown>"
+    let validation = validateComposer(
+        ComposerValidationInput(
+            role: role,
+            valueReadable: true,
+            selectionSettable: isAttributeSettable(
+                element,
+                kAXSelectedTextRangeAttribute as CFString
+            ),
+            enabled: boolAttribute(
+                element,
+                kAXEnabledAttribute as CFString
+            ),
+            semanticContext: metadata.context,
+            frame: frame,
+            windowFrame: windowFrame
+        ),
+        mode: selectionMode
+    )
 
-        guard
-            margin
-                >= minimumComposerScoreMargin
-        else {
-            return (
-                nil,
-                [
-                    "composer search was ambiguous: "
-                        + "bestScore="
-                        + "\(bestCandidate.score) "
-                        + "runnerUpScore="
-                        + "\(runnerUp.score) "
-                        + "margin=\(margin)"
-                ] + diagnostics
-            )
-        }
+    guard validation.isEligible else {
+        fail(
+            code: selectionMode == .focused
+                ? "codex_composer_not_focused"
+                : "codex_composer_not_found",
+            message: selectionMode == .focused
+                ? "The focused text field is not the Codex composer."
+                : "Could not safely validate the Codex composer.",
+            details: [
+                "selectionMode": selectionMode.rawValue,
+                "validationCode": validation.code
+            ]
+        )
     }
 
-    return (
-        bestCandidate.element,
-        diagnostics
+    let targetFingerprint = makeComposerTargetFingerprint(
+        ComposerTargetFingerprintInput(
+            pid: Int(application.processIdentifier),
+            windowFrame: windowFrame,
+            elementFrame: frame,
+            rolePath: metadata.rolePath,
+            identifiers: metadata.identifiers,
+            matchedSignals: validation.matchedSignals
+        )
+    )
+
+    return FocusedTextArea(
+        element: element,
+        application: application,
+        text: text,
+        targetFingerprint: targetFingerprint,
+        selectionMode: selectionMode
     )
 }
 
@@ -989,6 +1131,8 @@ private func findFocusedTextArea(
                 as CFString
         )
 
+        let focusResolutionState: FocusResolutionState
+
         if
             focusedResult.error == .success,
             let rawFocusedElement =
@@ -1024,10 +1168,12 @@ private func findFocusedTextArea(
                     continue
                 }
 
-                return FocusedTextArea(
+                return validatedFocusedTextArea(
                     element: textArea,
                     application: application,
-                    text: text
+                    applicationElement: applicationElement,
+                    text: text,
+                    selectionMode: .focused
                 )
             }
 
@@ -1039,13 +1185,17 @@ private func findFocusedTextArea(
                 )
                 ?? "<unknown>"
 
-            diagnostics.append(
-                "attempt \(attempt): "
-                    + "focused role "
-                    + "\(focusedRole) "
-                    + "is not a writable AXTextArea"
+            fail(
+                code: "codex_composer_not_focused",
+                message: "The focused control is not the Codex composer.",
+                details: [
+                    "selectionMode": "focused",
+                    "validationCode": "focused_element_not_text_area",
+                    "role": focusedRole
+                ]
             )
         } else {
+            focusResolutionState = .unavailable
             diagnostics.append(
                 "attempt \(attempt): "
                     + "AXFocusedUIElement error="
@@ -1055,9 +1205,14 @@ private func findFocusedTextArea(
             )
         }
 
-        if fallbackAttempts.contains(
+        if
+            shouldAttemptComposerFallback(
+                after: focusResolutionState
+            ),
+            fallbackAttempts.contains(
             attempt
-        ) {
+            )
+        {
             let fallback =
                 findCodexComposerInFocusedWindow(
                     applicationElement:
@@ -1096,10 +1251,12 @@ private func findFocusedTextArea(
                     continue
                 }
 
-                return FocusedTextArea(
+                return validatedFocusedTextArea(
                     element: textArea,
                     application: application,
-                    text: text
+                    applicationElement: applicationElement,
+                    text: text,
+                    selectionMode: .fallback
                 )
             }
         }
@@ -1445,6 +1602,7 @@ private func doctorCommand(delay: TimeInterval) {
             focused.element,
             kAXSelectedTextRangeAttribute as CFString
         ),
+        "selectionMode": focused.selectionMode.rawValue,
         "textLength": focused.text.count,
         "utf16Length": utf16Length(focused.text),
         "accessibilityCharacterCount": integerAttribute(
@@ -1510,6 +1668,8 @@ private func readCommand(delay: TimeInterval) {
         "text": serializedText,
         "serializedText": serializedText,
         "renderedText": focused.text,
+        "targetFingerprint": focused.targetFingerprint,
+        "selectionMode": focused.selectionMode.rawValue,
 
         "textLength": serializedText.count,
         "serializedTextLength": serializedText.count,
@@ -1552,7 +1712,8 @@ private func replaceCommand(delay: TimeInterval) {
             code: "invalid_replace_request",
             message: """
             Replace expects JSON containing expectedOriginalText, \
-            replacementText, and optional restoreClipboard.
+            expectedTargetFingerprint, replacementText, and optional \
+            restoreClipboard.
             """,
             status: 64,
             details: [
@@ -1570,6 +1731,24 @@ private func replaceCommand(delay: TimeInterval) {
     }
 
     let focused = findFocusedTextArea(delay: delay)
+
+    guard
+        focused.targetFingerprint
+            == request.expectedTargetFingerprint
+    else {
+        fail(
+            code: "composer_target_changed",
+            message: """
+            The validated Codex composer changed after it was read. No \
+            clipboard access or replacement was performed.
+            """,
+            details: [
+                "selectionMode": focused.selectionMode.rawValue,
+                "validationCode": "target_fingerprint_mismatch"
+            ]
+        )
+    }
+
     let pasteboard = NSPasteboard.general
     let clipboardSnapshots = captureClipboard(pasteboard)
 
@@ -1738,6 +1917,7 @@ private func replaceCommand(delay: TimeInterval) {
         "selectionVerified": true,
         "verificationMethod": "command-a-copy-serialized",
         "replacementVerified": true,
+        "selectionMode": focused.selectionMode.rawValue,
         "originalLength": copiedOriginalText.count,
         "replacementLength": request.replacementText.count,
         "clipboardRestored": clipboardResult.restored,
@@ -1766,6 +1946,7 @@ private func usage() -> Never {
         replace reads this JSON object from stdin:
           {
             "expectedOriginalText": "...",
+            "expectedTargetFingerprint": "...",
             "replacementText": "...",
             "restoreClipboard": true
           }

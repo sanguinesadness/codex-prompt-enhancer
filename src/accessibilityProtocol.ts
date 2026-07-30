@@ -5,6 +5,13 @@ export interface HelperPayload {
   readonly [key: string]: unknown;
 }
 
+export interface AccessibilityReplaceRequest {
+  readonly expectedOriginalText: string;
+  readonly expectedTargetFingerprint: string;
+  readonly replacementText: string;
+  readonly restoreClipboard: true;
+}
+
 export function tryParsePayload(
   stdout: string,
 ): HelperPayload | undefined {
@@ -31,6 +38,36 @@ export function tryParsePayload(
   }
 }
 
+export function isValidTargetFingerprint(
+  value: unknown,
+): value is string {
+  return typeof value === "string"
+    && /^[a-f0-9]{64}$/u.test(value);
+}
+
+export function buildAccessibilityReplaceRequest(
+  expectedOriginalText: string,
+  expectedTargetFingerprint: string,
+  replacementText: string,
+): AccessibilityReplaceRequest {
+  if (
+    !isValidTargetFingerprint(
+      expectedTargetFingerprint,
+    )
+  ) {
+    throw new Error(
+      "Invalid composer target fingerprint.",
+    );
+  }
+
+  return {
+    expectedOriginalText,
+    expectedTargetFingerprint,
+    replacementText,
+    restoreClipboard: true,
+  };
+}
+
 const SAFE_HELPER_DIAGNOSTIC_KEYS = new Set([
   "applicationName",
   "bundleIdentifier",
@@ -39,6 +76,8 @@ const SAFE_HELPER_DIAGNOSTIC_KEYS = new Set([
   "focused",
   "valueReadable",
   "selectedTextRangeSettable",
+  "selectionMode",
+  "validationCode",
   "textLength",
   "utf16Length",
   "accessibilityCharacterCount",

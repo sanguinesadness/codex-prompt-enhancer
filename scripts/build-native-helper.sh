@@ -7,7 +7,8 @@ PROJECT_DIR="$(
   pwd
 )"
 
-SOURCE="$PROJECT_DIR/native/PromptAccessibility.swift"
+MAIN_SOURCE="$PROJECT_DIR/native/PromptAccessibility.swift"
+VALIDATION_SOURCE="$PROJECT_DIR/native/ComposerValidation.swift"
 OUTPUT_DIR="$PROJECT_DIR/bin"
 TEMP_OUTPUT="$OUTPUT_DIR/prompt-accessibility-helper.new"
 FINAL_OUTPUT="$OUTPUT_DIR/prompt-accessibility-helper"
@@ -44,7 +45,7 @@ fi
 
 sed \
   "s/__CODEX_PROMPT_ENHANCER_VERSION__/$VERSION/" \
-  "$SOURCE" \
+  "$MAIN_SOURCE" \
   > "$GENERATED_SOURCE"
 mkdir -p "$MODULE_CACHE"
 
@@ -60,6 +61,7 @@ xcrun swiftc \
   -framework AppKit \
   -framework ApplicationServices \
   -framework CoreGraphics \
+  "$VALIDATION_SOURCE" \
   "$GENERATED_SOURCE" \
   -o "$TEMP_OUTPUT"
 
