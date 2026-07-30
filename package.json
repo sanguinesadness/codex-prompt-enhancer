@@ -2,7 +2,7 @@
   "name": "codex-prompt-enhancer",
   "displayName": "Codex Prompt Enhancer",
   "description": "Enhances the current unsent Codex prompt in Cursor on macOS while preserving inline references and attachment chips.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "sanguinesadness",
   "private": true,
   "license": "MIT",
@@ -100,5 +100,13 @@
     "prompt",
     "prompt enhancement",
     "macos"
-  ]
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sanguinesadness/codex-prompt-enhancer.git"
+  },
+  "homepage": "https://github.com/sanguinesadness/codex-prompt-enhancer#readme",
+  "bugs": {
+    "url": "https://github.com/sanguinesadness/codex-prompt-enhancer/issues"
+  }
 }

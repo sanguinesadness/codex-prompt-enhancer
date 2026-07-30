@@ -305,6 +305,12 @@ function getUserFacingError(
         "or is not executable.",
       ].join(" ");
 
+    case "native_helper_output_too_large":
+      return [
+        "The current prompt is too large",
+        "for the native helper response limit.",
+      ].join(" ");
+
     default:
       return error.message;
     }

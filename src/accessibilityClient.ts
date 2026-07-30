@@ -11,6 +11,12 @@ import {
 import * as vscode from "vscode";
 
 const DEFAULT_HELPER_TIMEOUT_MS = 15_000;
+
+// The helper returns structured JSON containing the composer text.
+// This must not use the small rolling diagnostics buffer.
+const MAX_HELPER_STDOUT_LENGTH =
+  4 * 1024 * 1024;
+
 const MAX_DIAGNOSTIC_LENGTH = 8_000;
 
 export interface AccessibilityReadResult {
@@ -40,6 +46,7 @@ interface HelperPayload {
 interface ProcessState {
   cancelled: boolean;
   timedOut: boolean;
+  stdoutLimitExceeded: boolean;
 }
 
 interface ProcessResult {
@@ -169,6 +176,8 @@ export class AccessibilityClient {
         "native_helper_failed",
         `The native helper exited with code ${processResult.exitCode}.`,
         {
+          stdoutLength:
+            processResult.stdout.length,
           stderr: truncateDiagnostic(
             processResult.stderr,
           ),
@@ -242,6 +251,7 @@ async function runProcess(
   const state: ProcessState = {
     cancelled: false,
     timedOut: false,
+    stdoutLimitExceeded: false,
   };
 
   let stdout = "";
@@ -253,7 +263,19 @@ async function runProcess(
   child.stdout.on(
     "data",
     (chunk: string) => {
-      stdout = appendBounded(stdout, chunk);
+      if (state.stdoutLimitExceeded) {
+        return;
+      }
+
+      if (
+        stdout.length + chunk.length
+        > MAX_HELPER_STDOUT_LENGTH
+      ) {
+        state.stdoutLimitExceeded = true;
+        return;
+      }
+
+      stdout += chunk;
     },
   );
 
@@ -293,6 +315,20 @@ async function runProcess(
           `${Math.round(
             options.timeoutMilliseconds / 1_000,
           )} seconds.`,
+        ].join(" "),
+      );
+    }
+
+    if (state.stdoutLimitExceeded) {
+      throw new AccessibilityClientError(
+        "native_helper_output_too_large",
+        [
+          "The native helper response exceeded",
+          `${Math.round(
+            MAX_HELPER_STDOUT_LENGTH
+              / 1024
+              / 1024,
+          )} MB.`,
         ].join(" "),
       );
     }
