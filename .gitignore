@@ -1,4 +1,11 @@
 node_modules/
 dist/
+.test-dist/
+coverage/
+release/
 *.vsix
 .DS_Store
+*~
+*.bak
+*.orig
+*.backup*

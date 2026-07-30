@@ -1,9 +1,6 @@
 export const COMMANDS = {
   enhanceCurrentPrompt:
     "codexPromptEnhancer.enhanceCurrentPrompt",
-
-  testCodexRunner:
-    "codexPromptEnhancer.testCodexRunner",
 } as const;
 
 export const STATUS_BAR_ITEM_ID =

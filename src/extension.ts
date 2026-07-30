@@ -10,9 +10,6 @@ import {
 } from "./constants";
 import { CodexRunner } from "./codexRunner";
 import { EnhancerController } from "./enhancerController";
-import {
-  registerTestCodexRunnerCommand,
-} from "./testCodexRunnerCommand";
 
 export function activate(
   context: vscode.ExtensionContext,
@@ -73,18 +70,11 @@ export function activate(
       },
     );
 
-  const testCodexRunnerCommand =
-    registerTestCodexRunnerCommand(
-      codexRunner,
-      output,
-    );
-
   context.subscriptions.push(
     output,
     statusBarItem,
     controller,
     enhanceCommand,
-    testCodexRunnerCommand,
   );
 
   output.appendLine(

@@ -46,8 +46,7 @@ Before submitting:
 
 ```bash
 npm run check
-npm run build:native
-npm run package:vsix
+npm run ci
 ```
 
 Use the checklist in [Development](docs/development.md).
@@ -69,7 +68,7 @@ Include:
 
 - concise summary;
 - rationale;
-- manual test cases;
+- automated and manual test cases;
 - screenshots only when UI changed;
 - Cursor and macOS versions used;
 - security/privacy impact;

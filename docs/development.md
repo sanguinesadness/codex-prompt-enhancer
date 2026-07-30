@@ -4,7 +4,7 @@
 
 - macOS
 - Cursor
-- Node.js and npm
+- Node.js 22 and npm for development tooling
 - Swift compiler
 - Xcode Command Line Tools
 - Codex CLI
@@ -20,10 +20,13 @@ swiftc --version
 "$HOME/.local/bin/codex" --version
 ```
 
+The extension remains compatible with the Node 18 extension host used by the declared VS Code 1.85 API baseline. Node.js 22 is used only for repository tooling and CI.
+
 ## Repository layout
 
 ```text
 codex-prompt-enhancer/
+├── .github/       macOS continuous-integration workflow
 ├── .vscode/       Extension Development Host launch/tasks
 ├── bin/           Compiled native helper
 ├── dist/          Compiled JavaScript
@@ -31,9 +34,10 @@ codex-prompt-enhancer/
 ├── release/       Locally generated VSIX packages
 ├── scripts/       Build, package, and install scripts
 ├── src/           TypeScript extension source
-├── tests/         Prompt and CLI experiments
+├── tests/         Synthetic fixtures and unit tests
 ├── package.json
-└── tsconfig.json
+├── tsconfig.json
+└── tsconfig.test.json
 ```
 
 Generated or machine-specific files such as `node_modules/`, `.DS_Store`, local backups, and release artifacts should not be committed.
@@ -55,7 +59,7 @@ npm run build
 Compile TypeScript only:
 
 ```bash
-npm run check
+npm run compile
 ```
 
 Build the Swift helper only:
@@ -63,6 +67,29 @@ Build the Swift helper only:
 ```bash
 npm run build:native
 ```
+
+## Quality checks
+
+Run the complete source quality gate:
+
+```bash
+npm run check
+```
+
+This runs:
+
+- TypeScript type checking against the declared VS Code API baseline;
+- ESLint correctness rules;
+- synthetic unit tests;
+- repository privacy and artifact scanning.
+
+Run the same checks plus a production VSIX build and verification:
+
+```bash
+npm run ci
+```
+
+The GitHub Actions workflow runs `npm run ci` on macOS for pushes and pull requests. It verifies the package inside the job and does not upload the VSIX as a workflow artifact.
 
 ## Run in the Extension Development Host
 
@@ -93,7 +120,9 @@ The package script:
 - chooses `darwin-arm64` or `darwin-x64`;
 - creates the VSIX in `release/`;
 - verifies that `dist/extension.js` is included;
-- verifies that `bin/prompt-accessibility-helper` is included.
+- verifies that `bin/prompt-accessibility-helper` is included and executable;
+- rejects probe binaries, backup files, sources, tests, and development commands;
+- verifies that the packaged helper matches the current build.
 
 ## Install the local package
 
@@ -187,8 +216,7 @@ Do not replace the paste flow with direct `AXValue` assignment. Direct assignmen
 
    ```bash
    npm ci
-   npm run build
-   npm run package:vsix
+   npm run ci
    ```
 
 4. Install the generated VSIX into a clean Cursor profile.
@@ -196,7 +224,7 @@ Do not replace the paste flow with direct `AXValue` assignment. Direct assignmen
 6. Create a GitHub release.
 7. Attach the architecture-specific VSIX.
 8. Include the required launcher and permission notes in release notes.
-9. Confirm that no credentials, prompt logs, local paths, backup files, or `node_modules/` were committed.
+9. Confirm that `npm run privacy:check` reports no credentials, prompt logs, personal paths, backup files, or forbidden generated artifacts.
 
 ## Suggested GitHub repository files
 
