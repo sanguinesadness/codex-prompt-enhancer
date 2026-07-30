@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { describe, it } from "node:test";
 
 import {
-  removePromptFields,
+  extractSafeHelperDiagnostics,
   tryParsePayload,
 } from "../src/accessibilityProtocol";
 
@@ -35,16 +35,30 @@ describe("accessibility helper protocol", () => {
     assert.equal(tryParsePayload("[]"), undefined);
   });
 
-  it("removes prompt-bearing fields from error diagnostics", () => {
+  it("allows only known scalar helper diagnostics", () => {
     const payload = tryParsePayload(
       readFixture("accessibility-stale-error.json"),
     );
 
     assert.ok(payload);
-    const safeFields = removePromptFields(payload);
+    const safeFields = extractSafeHelperDiagnostics({
+      ...payload,
+      diagnostics: [
+        "Bearer synthetic-secret",
+      ],
+      nested: {
+        replacementText: "Synthetic replacement",
+      },
+      token: "synthetic-token",
+    });
 
-    assert.equal(safeFields.error, "stale_prompt");
+    assert.equal(safeFields.expectedLength, 25);
+    assert.equal(safeFields.copiedLength, 26);
+    assert.equal(safeFields.clipboardRestored, true);
     assert.equal("expectedOriginalText" in safeFields, false);
     assert.equal("replacementText" in safeFields, false);
+    assert.equal("diagnostics" in safeFields, false);
+    assert.equal("nested" in safeFields, false);
+    assert.equal("token" in safeFields, false);
   });
 });

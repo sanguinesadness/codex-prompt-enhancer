@@ -64,10 +64,13 @@ The extension starts the Codex CLI with `spawn()` and `shell: false`.
 
 The process:
 
+- must report Codex CLI version 0.145.0 or newer;
 - receives its prompt through stdin;
 - runs in a new empty temporary directory;
 - skips repository discovery;
 - uses a read-only sandbox;
+- receives only allowlisted runtime, authentication, proxy, and certificate environment variables;
+- disables shell, browser, app, computer-use, image-generation, multi-agent, hook, and workspace-dependency capabilities;
 - does not request approval;
 - uses an ephemeral session;
 - writes only the final assistant message to a temporary output file;
@@ -153,7 +156,9 @@ The output channel records operational metadata such as:
 - prompt length;
 - reference count;
 - process result;
-- safe diagnostics.
+- structured failure metadata.
+
+Codex stdout and stderr are drained and counted but never retained or written to the output channel. Native-helper failures expose only an allowlist of scalar operational fields.
 
 It should never log:
 

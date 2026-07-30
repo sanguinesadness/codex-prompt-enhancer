@@ -88,7 +88,7 @@ Open:
 View → Output → Codex Prompt Enhancer
 ```
 
-Inspect the `Diagnostics:` line.
+Inspect the `Codex failure metadata:` line. It intentionally contains only process state and byte counts, never raw Codex output.
 
 Common causes:
 
@@ -104,7 +104,19 @@ Test the CLI independently:
 "$HOME/.local/bin/codex" --version
 ```
 
+The reported version must be `0.145.0` or newer.
+
 When developing from source, run `npm run check` to verify request construction and protocol handling with synthetic tests before retrying in the Extension Development Host.
+
+## `Codex CLI 0.145.0 or newer is required`
+
+Update the configured Codex CLI, verify the new version, then retry:
+
+```bash
+"$HOME/.local/bin/codex" --version
+```
+
+If Cursor uses a different executable, update `codexPromptEnhancer.codexPath` and fully restart Cursor.
 
 ## Model is not supported with a ChatGPT account
 

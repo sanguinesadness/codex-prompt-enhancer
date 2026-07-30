@@ -13,6 +13,7 @@ import {
   ReferenceProtectionError,
   restoreInlineReferences,
 } from "./referenceProtection";
+import { extractSafeCodexDiagnostics } from "./safeDiagnostics";
 
 interface EnhancementOutcome {
   readonly changed: boolean;
@@ -346,10 +347,21 @@ function appendSafeDiagnostics(
 ): void {
   if (
     error instanceof CodexRunnerError
-    && error.diagnostics !== undefined
+    && error.metadata !== undefined
   ) {
+    const safeMetadata =
+      extractSafeCodexDiagnostics(
+        error.metadata,
+      );
+
+    if (Object.keys(safeMetadata).length === 0) {
+      return;
+    }
+
     output.appendLine(
-      `Codex diagnostics: ${error.diagnostics}`,
+      `Codex failure metadata: ${JSON.stringify(
+        safeMetadata,
+      )}`,
     );
     return;
   }
@@ -358,6 +370,7 @@ function appendSafeDiagnostics(
     error instanceof
     AccessibilityClientError
     && error.details !== undefined
+    && Object.keys(error.details).length > 0
   ) {
     output.appendLine(
       `Native helper diagnostics: ${JSON.stringify(

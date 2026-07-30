@@ -105,7 +105,7 @@ See [Architecture and security model](docs/architecture.md) for the full flow.
 
 - macOS
 - Cursor
-- OpenAI Codex CLI installed and authenticated
+- OpenAI Codex CLI 0.145.0 or newer, installed and authenticated
 - Prompt Enhancer skill installed at:
 
   ```text

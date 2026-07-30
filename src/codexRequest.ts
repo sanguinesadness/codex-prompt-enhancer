@@ -7,6 +7,22 @@ type CodexRequestConfiguration = Pick<
   "model" | "reasoningEffort"
 >;
 
+export const DISABLED_CODEX_FEATURES = [
+  "shell_tool",
+  "unified_exec",
+  "code_mode_host",
+  "browser_use",
+  "browser_use_external",
+  "browser_use_full_cdp_access",
+  "computer_use",
+  "apps",
+  "image_generation",
+  "multi_agent",
+  "multi_agent_v2",
+  "hooks",
+  "workspace_dependencies",
+] as const;
+
 export function buildEnhancementRequest(
   originalPrompt: string,
 ): string {
@@ -40,6 +56,13 @@ export function buildCodexArguments(
   const args: string[] = [
     "--ask-for-approval",
     "never",
+  ];
+
+  for (const feature of DISABLED_CODEX_FEATURES) {
+    args.push("--disable", feature);
+  }
+
+  args.push(
     "exec",
     "--ephemeral",
     "--sandbox",
@@ -58,7 +81,7 @@ export function buildCodexArguments(
     'model_reasoning_summary="none"',
     "--config",
     'model_verbosity="low"',
-  ];
+  );
 
   if (configuration.model !== undefined) {
     args.push("--model", configuration.model);

@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import {
   buildCodexArguments,
   buildEnhancementRequest,
+  DISABLED_CODEX_FEATURES,
 } from "../src/codexRequest";
 
 describe("Codex request construction", () => {
@@ -25,7 +26,23 @@ describe("Codex request construction", () => {
       "/tmp/enhancer/output.txt",
     );
 
-    assert.deepEqual(args.slice(0, 3), ["--ask-for-approval", "never", "exec"]);
+    assert.deepEqual(args.slice(0, 2), ["--ask-for-approval", "never"]);
+
+    const execIndex = args.indexOf("exec");
+
+    assert.ok(execIndex > 1);
+
+    for (const feature of DISABLED_CODEX_FEATURES) {
+      const disableIndex = args.findIndex(
+        (argument, index) =>
+          argument === "--disable"
+          && args[index + 1] === feature,
+      );
+
+      assert.ok(disableIndex >= 0);
+      assert.ok(disableIndex < execIndex);
+    }
+
     assert.ok(args.includes("--ephemeral"));
     assert.ok(args.includes("read-only"));
     assert.ok(args.includes("--ignore-user-config"));
