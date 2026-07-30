@@ -1,9 +1,0 @@
-{
-  "actualLength" : 0,
-  "actualLocation" : 73,
-  "error" : "text_selection_verification_failed",
-  "message" : "Cursor accepted the selection request, but the complete selection could not be verified before paste.",
-  "ok" : false,
-  "requestedLength" : 132,
-  "requestedLocation" : 0
-}

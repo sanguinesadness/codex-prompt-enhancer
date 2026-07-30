@@ -1,0 +1,10 @@
+{
+  "ok": false,
+  "error": "stale_prompt",
+  "message": "The prompt changed before replacement.",
+  "expectedOriginalText": "Original synthetic prompt",
+  "replacementText": "Synthetic replacement",
+  "expectedLength": 25,
+  "copiedLength": 26,
+  "clipboardRestored": true
+}

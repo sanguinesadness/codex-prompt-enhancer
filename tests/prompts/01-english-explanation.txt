@@ -1,5 +1,0 @@
-$prompt-enhancer
-
-look at LoginPageContent and tell me what happening there and how login works dont change anything
-
-[LoginPageContent](/Users/sanguinesadness/dev/madetask/madetask-frontoffice-react/src/pages/auth/LoginPageContent/)

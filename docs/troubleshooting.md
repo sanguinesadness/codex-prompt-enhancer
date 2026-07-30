@@ -104,7 +104,7 @@ Test the CLI independently:
 "$HOME/.local/bin/codex" --version
 ```
 
-Then run the extension’s **Test Codex CLI Runner** command from the Command Palette when developing from source.
+When developing from source, run `npm run check` to verify request construction and protocol handling with synthetic tests before retrying in the Extension Development Host.
 
 ## Model is not supported with a ChatGPT account
 

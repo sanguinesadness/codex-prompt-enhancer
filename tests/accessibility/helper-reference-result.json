@@ -1,7 +1,0 @@
-{
-  "clipboardRestored" : true,
-  "clipboardRestoreSkippedBecauseChanged" : false,
-  "error" : "paste_verification_failed",
-  "message" : "Cmd+V was sent, but the resulting Codex prompt did not match the requested replacement.",
-  "ok" : false
-}

@@ -1,0 +1,17 @@
+[
+  {
+    "id": "english-explanation",
+    "language": "en",
+    "text": "Explain how [LoginPage](/Users/example/project/src/LoginPage.tsx) handles authentication without changing any files."
+  },
+  {
+    "id": "russian-explanation",
+    "language": "ru",
+    "text": "Объясни, как [LoginPage](/Users/example/project/src/LoginPage.tsx) обрабатывает вход, ничего не меняя."
+  },
+  {
+    "id": "implementation-request",
+    "language": "en",
+    "text": "Update [LoginPage](/Users/example/project/src/LoginPage.tsx) to show a clear authentication error and add focused tests."
+  }
+]

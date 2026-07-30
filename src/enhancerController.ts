@@ -8,7 +8,6 @@ import {
   CodexRunner,
   CodexRunnerError,
 } from "./codexRunner";
-import { COMMANDS } from "./constants";
 import {
   protectInlineReferences,
   ReferenceProtectionError,

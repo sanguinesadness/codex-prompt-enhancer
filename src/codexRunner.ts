@@ -16,18 +16,21 @@ import {
 
 import * as vscode from "vscode";
 
+import { getCodexRunnerConfiguration } from "./configuration";
 import {
-  CodexRunnerConfiguration,
-  getCodexRunnerConfiguration,
-} from "./configuration";
+  buildCodexArguments,
+  buildEnhancementRequest,
+} from "./codexRequest";
+import {
+  appendBounded,
+  truncateDiagnostic,
+} from "./processDiagnostics";
 
 const TEMP_DIRECTORY_PREFIX =
   "codex-prompt-enhancer-";
 
 const OUTPUT_FILENAME =
   "enhanced-prompt.txt";
-
-const MAX_DIAGNOSTIC_LENGTH = 8_000;
 
 export interface CodexEnhancementResult {
   readonly text: string;
@@ -207,78 +210,6 @@ interface MutableProcessState {
   timedOut: boolean;
 }
 
-function buildEnhancementRequest(
-  originalPrompt: string,
-): string {
-  return [
-    "$prompt-enhancer",
-    "",
-    "Use light prompt-enhancement mode.",
-    "",
-    "Important constraints for this enhancement pass:",
-    "- Rewrite only the supplied prompt.",
-    "- Do not answer or implement the prompt.",
-    "- Do not inspect repository files, referenced paths, attachments, screenshots, or external resources.",
-    "- Do not run shell commands or other tools.",
-    "- Preserve the language and original intent.",
-    "- Preserve every placeholder matching ⟦CODEX_REF_*⟧ exactly.",
-    "- Do not remove, duplicate, translate, reformat, rename, split, or wrap placeholders in backticks.",
-    "- Keep each placeholder attached to the same surrounding meaning as in the original prompt.",
-    "- Return only the enhanced prompt.",
-    "",
-    "----- BEGIN ORIGINAL PROMPT -----",
-    originalPrompt,
-    "----- END ORIGINAL PROMPT -----",
-  ].join("\n");
-}
-
-function buildCodexArguments(
-  configuration: CodexRunnerConfiguration,
-  temporaryDirectory: string,
-  outputFile: string,
-): string[] {
-  const args: string[] = [
-    "--ask-for-approval",
-    "never",
-
-    "exec",
-
-    "--ephemeral",
-    "--sandbox",
-    "read-only",
-    "--ignore-user-config",
-    "--skip-git-repo-check",
-    "--color",
-    "never",
-    "--cd",
-    temporaryDirectory,
-    "--output-last-message",
-    outputFile,
-
-    "--config",
-    `model_reasoning_effort="${configuration.reasoningEffort}"`,
-
-    "--config",
-    'model_reasoning_summary="none"',
-
-    "--config",
-    'model_verbosity="low"',
-  ];
-
-  if (configuration.model !== undefined) {
-    args.push(
-      "--model",
-      configuration.model,
-    );
-  }
-
-  // A single dash tells `codex exec` to read
-  // the initial prompt from stdin.
-  args.push("-");
-
-  return args;
-}
-
 async function verifyCodexExecutable(
   executablePath: string,
 ): Promise<void> {
@@ -450,38 +381,6 @@ function terminateProcess(
     }, 2_000);
 
   forceKillTimeout.unref();
-}
-
-function appendBounded(
-  current: string,
-  chunk: string,
-): string {
-  const combined = current + chunk;
-
-  if (
-    combined.length
-    <= MAX_DIAGNOSTIC_LENGTH
-  ) {
-    return combined;
-  }
-
-  return combined.slice(
-    -MAX_DIAGNOSTIC_LENGTH,
-  );
-}
-
-function truncateDiagnostic(
-  value: string,
-): string | undefined {
-  const trimmed = value.trim();
-
-  if (trimmed.length === 0) {
-    return undefined;
-  }
-
-  return trimmed.slice(
-    -MAX_DIAGNOSTIC_LENGTH,
-  );
 }
 
 function getErrorMessage(

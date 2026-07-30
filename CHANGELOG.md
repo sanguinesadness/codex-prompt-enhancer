@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Removes legacy probe binaries, backup sources, captured prompt artifacts, and the development-only runner command.
+- Adds synthetic unit tests, TypeScript linting, repository privacy checks, macOS CI, and stricter VSIX verification.
+- Aligns VS Code 1.85 type compatibility and generates the native helper version from the extension manifest.
+
 ## 0.1.0
 
 - Initial local macOS release.

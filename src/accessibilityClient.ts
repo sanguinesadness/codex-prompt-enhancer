@@ -10,14 +10,21 @@ import {
 
 import * as vscode from "vscode";
 
+import {
+  removePromptFields,
+  tryParsePayload,
+} from "./accessibilityProtocol";
+import {
+  appendBounded,
+  truncateDiagnostic,
+} from "./processDiagnostics";
+
 const DEFAULT_HELPER_TIMEOUT_MS = 15_000;
 
 // The helper returns structured JSON containing the composer text.
 // This must not use the small rolling diagnostics buffer.
 const MAX_HELPER_STDOUT_LENGTH =
   4 * 1024 * 1024;
-
-const MAX_DIAGNOSTIC_LENGTH = 8_000;
 
 export interface AccessibilityReadResult {
   readonly text: string;
@@ -34,13 +41,6 @@ export interface AccessibilityReplaceResult {
   readonly clipboardRestored: boolean;
   readonly applicationName?: string;
   readonly bundleIdentifier?: string;
-}
-
-interface HelperPayload {
-  readonly ok: boolean;
-  readonly error?: string;
-  readonly message?: string;
-  readonly [key: string]: unknown;
 }
 
 interface ProcessState {
@@ -424,78 +424,4 @@ async function verifyExecutable(
       ].join("\n"),
     );
   }
-}
-
-function tryParsePayload(
-  stdout: string,
-): HelperPayload | undefined {
-  const trimmed = stdout.trim();
-
-  if (trimmed.length === 0) {
-    return undefined;
-  }
-
-  try {
-    const parsed: unknown =
-      JSON.parse(trimmed);
-
-    if (
-      typeof parsed !== "object"
-      || parsed === null
-      || Array.isArray(parsed)
-    ) {
-      return undefined;
-    }
-
-    return parsed as HelperPayload;
-  } catch {
-    return undefined;
-  }
-}
-
-function removePromptFields(
-  payload: HelperPayload,
-): Readonly<Record<string, unknown>> {
-  const {
-    text: _text,
-    serializedText: _serializedText,
-    renderedText: _renderedText,
-    expectedOriginalText: _expectedOriginalText,
-    replacementText: _replacementText,
-    ...safeFields
-  } = payload;
-
-  return safeFields;
-}
-
-function appendBounded(
-  current: string,
-  chunk: string,
-): string {
-  const combined = current + chunk;
-
-  if (
-    combined.length
-    <= MAX_DIAGNOSTIC_LENGTH
-  ) {
-    return combined;
-  }
-
-  return combined.slice(
-    -MAX_DIAGNOSTIC_LENGTH,
-  );
-}
-
-function truncateDiagnostic(
-  value: string,
-): string | undefined {
-  const trimmed = value.trim();
-
-  if (trimmed.length === 0) {
-    return undefined;
-  }
-
-  return trimmed.slice(
-    -MAX_DIAGNOSTIC_LENGTH,
-  );
 }

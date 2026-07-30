@@ -5,7 +5,7 @@ import CoreGraphics
 
 // MARK: - Constants
 
-private let helperVersion = "0.1.0"
+private let helperVersion = "__CODEX_PROMPT_ENHANCER_VERSION__"
 
 private let knownCursorBundleIdentifiers: Set<String> = [
     "com.todesktop.230313mzl4w4u92"
@@ -139,7 +139,7 @@ private func requireAccessibilityPermission() {
         fail(
             code: "accessibility_permission_required",
             message: """
-            Accessibility permission is not granted. Enable Warp or the helper \
+            Accessibility permission is not granted. Enable Cursor or the helper \
             under System Settings → Privacy & Security → Accessibility.
             """,
             status: 77
