@@ -119,10 +119,12 @@ The package script:
 - compiles TypeScript;
 - chooses `darwin-arm64` or `darwin-x64`;
 - creates the VSIX in `release/`;
+- preserves package-local README links;
 - verifies that `dist/extension.js` is included;
 - verifies that `bin/prompt-accessibility-helper` is included and executable;
 - rejects probe binaries, backup files, sources, tests, and development commands;
-- verifies that the packaged helper matches the current build.
+- verifies that the packaged helper matches the current build;
+- verifies that both README example images are current and correctly sized.
 
 ## Install the local package
 

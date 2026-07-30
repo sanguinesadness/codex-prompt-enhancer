@@ -53,6 +53,7 @@ echo "Creating VSIX package..."
 
 npx vsce package \
   --allow-missing-repository \
+  --no-rewrite-relative-links \
   --target "$TARGET" \
   --out "$VSIX_PATH"
 

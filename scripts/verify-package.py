@@ -3,6 +3,7 @@
 import json
 from pathlib import Path, PurePosixPath
 import stat
+import struct
 import sys
 import zipfile
 
@@ -12,10 +13,26 @@ PACKAGE_JSON = ROOT_DIR / "package.json"
 HELPER_PATH = ROOT_DIR / "bin" / "prompt-accessibility-helper"
 RELEASE_DIR = ROOT_DIR / "release"
 
+PACKAGED_IMAGES = {
+    "extension/docs/images/example-english.png": (
+        ROOT_DIR / "docs/images/example-english.png"
+    ),
+    "extension/docs/images/example-russian.png": (
+        ROOT_DIR / "docs/images/example-russian.png"
+    ),
+}
+
+README_IMAGE_LINKS = (
+    "docs/images/example-english.png",
+    "docs/images/example-russian.png",
+)
+
 REQUIRED_FILES = {
     "extension/package.json",
     "extension/dist/extension.js",
     "extension/bin/prompt-accessibility-helper",
+    "extension/readme.md",
+    *PACKAGED_IMAGES,
 }
 
 FORBIDDEN_PREFIXES = (
@@ -91,6 +108,21 @@ def verify_manifest(data: bytes) -> None:
         fail("Development test activation remains in the packaged manifest.")
 
 
+def verify_readme(data: bytes) -> None:
+    readme = data.decode("utf8")
+
+    for image_link in README_IMAGE_LINKS:
+        if f"]({image_link})" not in readme:
+            fail(f"Packaged README does not use its bundled image: {image_link}")
+
+
+def png_dimensions(data: bytes) -> tuple[int, int]:
+    if data[:16] != b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR":
+        fail("Packaged README image is not a valid PNG.")
+
+    return struct.unpack(">II", data[16:24])
+
+
 def verify_package(vsix_path: Path) -> None:
     if not HELPER_PATH.is_file():
         fail(f"Built helper does not exist: {HELPER_PATH}")
@@ -131,7 +163,19 @@ def verify_package(vsix_path: Path) -> None:
         if packaged_helper != HELPER_PATH.read_bytes():
             fail("Packaged helper does not match the current built helper.")
 
+        for archive_name, source_path in PACKAGED_IMAGES.items():
+            if not source_path.is_file():
+                fail(f"README image does not exist: {source_path}")
+
+            packaged_image = archive.read(archive_name)
+            if packaged_image != source_path.read_bytes():
+                fail(f"Packaged README image is stale: {archive_name}")
+
+            if png_dimensions(packaged_image) != (1376, 1040):
+                fail(f"Packaged README image has wrong dimensions: {archive_name}")
+
         verify_manifest(archive.read("extension/package.json"))
+        verify_readme(archive.read("extension/readme.md"))
 
     print(f"PASS: verified production VSIX: {vsix_path}")
 

@@ -41,39 +41,15 @@ The status-bar item is informational only and is intentionally not clickable.
 
 ## Examples in Cursor
 
-These examples show the complete workflow: type a rough prompt, keep the caret in the composer, press **Cmd+Shift+R**, and review the rewritten prompt before sending it.
+Press **Cmd+Shift+R** to turn a rough prompt into a clearer version without sending it.
 
-### English example
+### English
 
-Start with this intentionally rough prompt:
+![English prompt before and after enhancement in Cursor](docs/images/example-english.png)
 
-```text
-look at [LoginPage](/Users/example/project/src/LoginPage.tsx) and explain what happening there dont change anything also tell me how it connected to auth
-```
+### Russian
 
-After pressing **Cmd+Shift+R**, the extension rewrites the text in the same composer while preserving the inline reference and leaving the prompt unsent.
-
-> **Screenshot placeholder — English workflow**
->
-> Paste the screenshot of the enhanced English prompt in Cursor here.
->
-> Suggested Markdown: `![English prompt enhanced in Cursor](docs/images/example-english.png)`
-
-### Russian example
-
-Start with this intentionally rough prompt:
-
-```text
-посмотри [LoginPage](/Users/example/project/src/LoginPage.tsx) и обьясни что тут происходит ничего не меняй еще скажи как это связано с авторизацией
-```
-
-After pressing **Cmd+Shift+R**, the extension keeps the prompt in Russian, improves its wording and structure, preserves the reference, and does not send it automatically.
-
-> **Screenshot placeholder — Russian workflow**
->
-> Paste the screenshot of the enhanced Russian prompt in Cursor here.
->
-> Suggested Markdown: `![Russian prompt enhanced in Cursor](docs/images/example-russian.png)`
+![Russian prompt before and after enhancement in Cursor](docs/images/example-russian.png)
 
 ## What is preserved
 
