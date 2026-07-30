@@ -17,14 +17,22 @@ PACKAGED_IMAGES = {
     "extension/docs/images/example-english.png": (
         ROOT_DIR / "docs/images/example-english.png"
     ),
+    "extension/docs/images/example-english-complex.png": (
+        ROOT_DIR / "docs/images/example-english-complex.png"
+    ),
     "extension/docs/images/example-russian.png": (
         ROOT_DIR / "docs/images/example-russian.png"
+    ),
+    "extension/docs/images/example-russian-complex.png": (
+        ROOT_DIR / "docs/images/example-russian-complex.png"
     ),
 }
 
 README_IMAGE_LINKS = (
     "docs/images/example-english.png",
+    "docs/images/example-english-complex.png",
     "docs/images/example-russian.png",
+    "docs/images/example-russian-complex.png",
 )
 
 REQUIRED_FILES = {

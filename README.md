@@ -43,13 +43,25 @@ The status-bar item is informational only and is intentionally not clickable.
 
 Press **Cmd+Shift+R** to turn a rough prompt into a clearer version without sending it.
 
-### English
+### Simple Examples
+
+#### English
 
 ![English prompt before and after enhancement in Cursor](docs/images/example-english.png)
 
-### Russian
+#### Russian
 
 ![Russian prompt before and after enhancement in Cursor](docs/images/example-russian.png)
+
+### Complex Examples
+
+#### English
+
+![Complex English prompt before and after enhancement in Cursor](docs/images/example-english-complex.png)
+
+#### Russian
+
+![Complex Russian prompt before and after enhancement in Cursor](docs/images/example-russian-complex.png)
 
 ## What is preserved
 

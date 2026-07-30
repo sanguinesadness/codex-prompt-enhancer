@@ -124,7 +124,7 @@ The package script:
 - verifies that `bin/prompt-accessibility-helper` is included and executable;
 - rejects probe binaries, backup files, sources, tests, and development commands;
 - verifies that the packaged helper matches the current build;
-- verifies that both README example images are current and correctly sized.
+- verifies that all four README example images are current and correctly sized.
 
 ## Install the local package
 
