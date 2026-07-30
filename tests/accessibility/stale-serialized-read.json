@@ -1,0 +1,17 @@
+{
+  "applicationName" : "Cursor",
+  "bundleIdentifier" : "com.todesktop.230313mzl4w4u92",
+  "clipboardRestored" : true,
+  "clipboardRestoreSkippedBecauseChanged" : false,
+  "ok" : true,
+  "pid" : 94987,
+  "renderedText" : "LoginPageContent\nAX_REFERENCE_HELPER_REPLACED: Explain how this code works.\nAlso inspect \n\nindex.tsx\n and explain how it is connected.",
+  "renderedTextLength" : 134,
+  "renderedUtf16Length" : 134,
+  "role" : "AXTextArea",
+  "serializedText" : "[LoginPageContent](\/Users\/sanguinesadness\/dev\/madetask\/madetask-frontoffice-react\/src\/pages\/auth\/LoginPageContent\/)\nAX_REFERENCE_HELPER_REPLACED: Explain how this code works.\n\nAlso inspect [index.tsx](\/Users\/sanguinesadness\/dev\/madetask\/madetask-frontoffice-react\/pages\/auth\/login\/index.tsx) and explain how it is connected.",
+  "serializedTextLength" : 324,
+  "serializedUtf16Length" : 324,
+  "text" : "[LoginPageContent](\/Users\/sanguinesadness\/dev\/madetask\/madetask-frontoffice-react\/src\/pages\/auth\/LoginPageContent\/)\nAX_REFERENCE_HELPER_REPLACED: Explain how this code works.\n\nAlso inspect [index.tsx](\/Users\/sanguinesadness\/dev\/madetask\/madetask-frontoffice-react\/pages\/auth\/login\/index.tsx) and explain how it is connected.",
+  "textLength" : 324
+}

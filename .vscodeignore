@@ -1,0 +1,12 @@
+.vscode/**
+src/**
+native/**
+scripts/**
+tests/**
+node_modules/**
+release/**
+*.vsix
+*.backup*
+MVP.md
+tsconfig.json
+package-lock.json

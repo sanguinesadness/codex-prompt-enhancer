@@ -1,0 +1,5 @@
+$prompt-enhancer
+
+посмотри LoginPageContent и обьясни как там работает логин куда идет запрос и что происходит после успешного входа ничего не меняй
+
+[LoginPageContent](/Users/sanguinesadness/dev/madetask/madetask-frontoffice-react/src/pages/auth/LoginPageContent/)

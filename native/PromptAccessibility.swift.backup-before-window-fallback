@@ -1,0 +1,1129 @@
+import Foundation
+import AppKit
+import ApplicationServices
+import CoreGraphics
+
+// MARK: - Constants
+
+private let helperVersion = "0.1.0"
+
+private let knownCursorBundleIdentifiers: Set<String> = [
+    "com.todesktop.230313mzl4w4u92"
+]
+
+private let selectAllKeyCode: CGKeyCode = 0   // Physical A key.
+private let copyKeyCode: CGKeyCode = 8        // Physical C key.
+private let pasteKeyCode: CGKeyCode = 9       // Physical V key.
+private let rightArrowKeyCode: CGKeyCode = 124
+private let focusAttempts = 20
+private let focusRetryDelay: TimeInterval = 0.1
+private let pasteVerificationTimeout: TimeInterval = 3.0
+
+// MARK: - Input models
+
+private struct ReplaceRequest: Decodable {
+    let expectedOriginalText: String
+    let replacementText: String
+    let restoreClipboard: Bool?
+}
+
+// MARK: - Internal models
+
+private struct FocusedTextArea {
+    let element: AXUIElement
+    let application: NSRunningApplication
+    let text: String
+}
+
+private struct PasteboardRepresentation {
+    let type: NSPasteboard.PasteboardType
+    let data: Data
+}
+
+private struct PasteboardItemSnapshot {
+    let representations: [PasteboardRepresentation]
+}
+
+private struct ClipboardRestoreResult {
+    let restored: Bool
+    let skippedBecauseChanged: Bool
+}
+
+// MARK: - JSON output
+
+private func writeJSON(_ object: Any) {
+    do {
+        let data = try JSONSerialization.data(
+            withJSONObject: object,
+            options: [.prettyPrinted, .sortedKeys]
+        )
+
+        FileHandle.standardOutput.write(data)
+        FileHandle.standardOutput.write(Data("\n".utf8))
+    } catch {
+        FileHandle.standardError.write(
+            Data("Failed to serialize JSON: \(error)\n".utf8)
+        )
+        exit(70)
+    }
+}
+
+private func fail(
+    code: String,
+    message: String,
+    status: Int32 = 1,
+    details: [String: Any] = [:]
+) -> Never {
+    var payload: [String: Any] = [
+        "ok": false,
+        "error": code,
+        "message": message
+    ]
+
+    for (key, value) in details {
+        payload[key] = value
+    }
+
+    writeJSON(payload)
+    exit(status)
+}
+
+// MARK: - General utilities
+
+private func parseDelay(_ arguments: [String]) -> TimeInterval {
+    guard arguments.count >= 3 else {
+        return 0
+    }
+
+    guard let delay = TimeInterval(arguments[2]), delay >= 0 else {
+        fail(
+            code: "invalid_delay",
+            message: "Delay must be a non-negative number.",
+            status: 64
+        )
+    }
+
+    return delay
+}
+
+private func waitIfNeeded(_ delay: TimeInterval) {
+    guard delay > 0 else {
+        return
+    }
+
+    FileHandle.standardError.write(
+        Data(
+            "Waiting \(delay) seconds. Focus the Codex composer now…\n".utf8
+        )
+    )
+
+    Thread.sleep(forTimeInterval: delay)
+}
+
+private func utf16Length(_ text: String) -> Int {
+    (text as NSString).length
+}
+
+// MARK: - Accessibility permission
+
+private func requestAccessibilityPermission() -> Bool {
+    let options = [
+        "AXTrustedCheckOptionPrompt": true
+    ] as CFDictionary
+
+    return AXIsProcessTrustedWithOptions(options)
+}
+
+private func requireAccessibilityPermission() {
+    guard AXIsProcessTrusted() else {
+        fail(
+            code: "accessibility_permission_required",
+            message: """
+            Accessibility permission is not granted. Enable Warp or the helper \
+            under System Settings → Privacy & Security → Accessibility.
+            """,
+            status: 77
+        )
+    }
+}
+
+// MARK: - AX attribute helpers
+
+private func copyAttribute(
+    _ element: AXUIElement,
+    _ attribute: CFString
+) -> (value: CFTypeRef?, error: AXError) {
+    var value: CFTypeRef?
+
+    let error = AXUIElementCopyAttributeValue(
+        element,
+        attribute,
+        &value
+    )
+
+    return (value, error)
+}
+
+private func stringAttribute(
+    _ element: AXUIElement,
+    _ attribute: CFString
+) -> String? {
+    let result = copyAttribute(element, attribute)
+
+    guard
+        result.error == .success,
+        let rawValue = result.value
+    else {
+        return nil
+    }
+
+    if let string = rawValue as? String {
+        return string
+    }
+
+    if let attributedString = rawValue as? NSAttributedString {
+        return attributedString.string
+    }
+
+    return nil
+}
+
+private func boolAttribute(
+    _ element: AXUIElement,
+    _ attribute: CFString
+) -> Bool? {
+    let result = copyAttribute(element, attribute)
+
+    guard
+        result.error == .success,
+        let rawValue = result.value
+    else {
+        return nil
+    }
+
+    return rawValue as? Bool
+}
+
+
+private func integerAttribute(
+    _ element: AXUIElement,
+    _ attribute: CFString
+) -> Int? {
+    let result = copyAttribute(element, attribute)
+
+    guard
+        result.error == .success,
+        let rawValue = result.value
+    else {
+        return nil
+    }
+
+    if let number = rawValue as? NSNumber {
+        return number.intValue
+    }
+
+    return nil
+}
+
+private func rangeAttribute(
+    _ element: AXUIElement,
+    _ attribute: CFString
+) -> CFRange? {
+    let result = copyAttribute(element, attribute)
+
+    guard
+        result.error == .success,
+        let rawValue = result.value,
+        CFGetTypeID(rawValue) == AXValueGetTypeID()
+    else {
+        return nil
+    }
+
+    let axValue = rawValue as! AXValue
+    var range = CFRange()
+
+    guard AXValueGetValue(
+        axValue,
+        .cfRange,
+        &range
+    ) else {
+        return nil
+    }
+
+    return range
+}
+
+private func elementAttribute(
+    _ element: AXUIElement,
+    _ attribute: CFString
+) -> AXUIElement? {
+    let result = copyAttribute(element, attribute)
+
+    guard
+        result.error == .success,
+        let rawValue = result.value
+    else {
+        return nil
+    }
+
+    return rawValue as! AXUIElement
+}
+
+private func isAttributeSettable(
+    _ element: AXUIElement,
+    _ attribute: CFString
+) -> Bool {
+    var settable = DarwinBoolean(false)
+
+    let error = AXUIElementIsAttributeSettable(
+        element,
+        attribute,
+        &settable
+    )
+
+    return error == .success && settable.boolValue
+}
+
+// MARK: - Cursor identification
+
+private func isCursorApplication(
+    _ application: NSRunningApplication
+) -> Bool {
+    let name = application.localizedName ?? ""
+    let bundleIdentifier = application.bundleIdentifier ?? ""
+
+    return name.caseInsensitiveCompare("Cursor") == .orderedSame
+        || knownCursorBundleIdentifiers.contains(bundleIdentifier)
+}
+
+private func applicationMetadata(
+    _ application: NSRunningApplication
+) -> [String: Any] {
+    [
+        "applicationName": application.localizedName ?? NSNull(),
+        "bundleIdentifier": application.bundleIdentifier ?? NSNull(),
+        "pid": Int(application.processIdentifier)
+    ]
+}
+
+// MARK: - Focused text-area discovery
+
+private func nearestWritableTextArea(
+    from focusedElement: AXUIElement
+) -> AXUIElement? {
+    var current: AXUIElement? = focusedElement
+
+    // The focused object is normally the AXTextArea itself. Parent traversal
+    // handles Cursor builds where focus lands on a nested accessibility node.
+    for _ in 0...5 {
+        guard let element = current else {
+            return nil
+        }
+
+        let role = stringAttribute(
+            element,
+            kAXRoleAttribute as CFString
+        )
+
+        let hasReadableValue =
+            stringAttribute(element, kAXValueAttribute as CFString) != nil
+
+        let selectionIsSettable = isAttributeSettable(
+            element,
+            kAXSelectedTextRangeAttribute as CFString
+        )
+
+        if
+            role == kAXTextAreaRole as String,
+            hasReadableValue,
+            selectionIsSettable
+        {
+            return element
+        }
+
+        current = elementAttribute(
+            element,
+            kAXParentAttribute as CFString
+        )
+    }
+
+    return nil
+}
+
+private func findFocusedTextArea(
+    delay: TimeInterval
+) -> FocusedTextArea {
+    waitIfNeeded(delay)
+
+    var diagnostics: [String] = []
+
+    for attempt in 1...focusAttempts {
+        guard let application = NSWorkspace.shared.frontmostApplication else {
+            diagnostics.append(
+                "attempt \(attempt): frontmost application unavailable"
+            )
+            Thread.sleep(forTimeInterval: focusRetryDelay)
+            continue
+        }
+
+        guard isCursorApplication(application) else {
+            diagnostics.append(
+                "attempt \(attempt): frontmost app is "
+                    + (application.localizedName ?? "<unknown>")
+            )
+            Thread.sleep(forTimeInterval: focusRetryDelay)
+            continue
+        }
+
+        let applicationElement = AXUIElementCreateApplication(
+            application.processIdentifier
+        )
+
+        let result = copyAttribute(
+            applicationElement,
+            kAXFocusedUIElementAttribute as CFString
+        )
+
+        guard
+            result.error == .success,
+            let rawFocusedElement = result.value
+        else {
+            diagnostics.append(
+                "attempt \(attempt): AXFocusedUIElement error="
+                    + String(result.error.rawValue)
+            )
+            Thread.sleep(forTimeInterval: focusRetryDelay)
+            continue
+        }
+
+        let focusedElement = rawFocusedElement as! AXUIElement
+
+        guard let textArea = nearestWritableTextArea(
+            from: focusedElement
+        ) else {
+            let focusedRole = stringAttribute(
+                focusedElement,
+                kAXRoleAttribute as CFString
+            ) ?? "<unknown>"
+
+            diagnostics.append(
+                "attempt \(attempt): focused role \(focusedRole) "
+                    + "is not a writable AXTextArea"
+            )
+
+            Thread.sleep(forTimeInterval: focusRetryDelay)
+            continue
+        }
+
+        guard let text = stringAttribute(
+            textArea,
+            kAXValueAttribute as CFString
+        ) else {
+            diagnostics.append(
+                "attempt \(attempt): AXTextArea has no readable value"
+            )
+            Thread.sleep(forTimeInterval: focusRetryDelay)
+            continue
+        }
+
+        return FocusedTextArea(
+            element: textArea,
+            application: application,
+            text: text
+        )
+    }
+
+    fail(
+        code: "codex_composer_not_found",
+        message: """
+        Could not find a focused writable Cursor text area. Ensure Cursor was \
+        launched with --force-renderer-accessibility=complete and place the \
+        caret inside the Codex composer.
+        """,
+        details: [
+            "diagnostics": Array(diagnostics.suffix(12))
+        ]
+    )
+}
+
+// MARK: - Composer focus
+
+private func focusTextArea(
+    _ textArea: AXUIElement
+) {
+    if boolAttribute(
+        textArea,
+        kAXFocusedAttribute as CFString
+    ) != true {
+        guard isAttributeSettable(
+            textArea,
+            kAXFocusedAttribute as CFString
+        ) else {
+            fail(
+                code: "composer_focus_not_settable",
+                message: """
+                The Codex composer is not focused and its AXFocused attribute \
+                is not settable.
+                """
+            )
+        }
+
+        let error = AXUIElementSetAttributeValue(
+            textArea,
+            kAXFocusedAttribute as CFString,
+            kCFBooleanTrue
+        )
+
+        guard error == .success else {
+            fail(
+                code: "composer_focus_failed",
+                message: "Could not focus the Codex composer.",
+                details: [
+                    "axError": error.rawValue
+                ]
+            )
+        }
+    }
+
+    // Allow Chromium to synchronize the accessibility focus with its DOM.
+    Thread.sleep(forTimeInterval: 0.1)
+
+    guard boolAttribute(
+        textArea,
+        kAXFocusedAttribute as CFString
+    ) == true else {
+        fail(
+            code: "composer_focus_verification_failed",
+            message: "The Codex composer did not retain focus."
+        )
+    }
+}
+
+// MARK: - Clipboard capture and restoration
+
+private func captureClipboard(
+    _ pasteboard: NSPasteboard
+) -> [PasteboardItemSnapshot] {
+    guard let items = pasteboard.pasteboardItems else {
+        return []
+    }
+
+    return items.compactMap { item in
+        let representations = item.types.compactMap { type
+            -> PasteboardRepresentation? in
+
+            guard let data = item.data(forType: type) else {
+                return nil
+            }
+
+            return PasteboardRepresentation(
+                type: type,
+                data: data
+            )
+        }
+
+        guard !representations.isEmpty else {
+            return nil
+        }
+
+        return PasteboardItemSnapshot(
+            representations: representations
+        )
+    }
+}
+
+private func restoreClipboard(
+    _ snapshots: [PasteboardItemSnapshot],
+    pasteboard: NSPasteboard,
+    expectedTemporaryChangeCount: Int
+) -> ClipboardRestoreResult {
+    // Avoid overwriting a clipboard change made by the user or another app
+    // while enhancement was running.
+    guard pasteboard.changeCount == expectedTemporaryChangeCount else {
+        return ClipboardRestoreResult(
+            restored: false,
+            skippedBecauseChanged: true
+        )
+    }
+
+    pasteboard.clearContents()
+
+    guard !snapshots.isEmpty else {
+        return ClipboardRestoreResult(
+            restored: true,
+            skippedBecauseChanged: false
+        )
+    }
+
+    let restoredItems = snapshots.compactMap {
+        snapshot -> NSPasteboardItem? in
+
+        let item = NSPasteboardItem()
+        var wroteRepresentation = false
+
+        for representation in snapshot.representations {
+            if item.setData(
+                representation.data,
+                forType: representation.type
+            ) {
+                wroteRepresentation = true
+            }
+        }
+
+        return wroteRepresentation ? item : nil
+    }
+
+    guard !restoredItems.isEmpty else {
+        return ClipboardRestoreResult(
+            restored: false,
+            skippedBecauseChanged: false
+        )
+    }
+
+    let success = pasteboard.writeObjects(restoredItems)
+
+    return ClipboardRestoreResult(
+        restored: success,
+        skippedBecauseChanged: false
+    )
+}
+
+// MARK: - Keyboard events
+
+private func postKey(
+    _ keyCode: CGKeyCode,
+    flags: CGEventFlags
+) {
+    let source = CGEventSource(
+        stateID: .hidSystemState
+    )
+
+    guard
+        let keyDown = CGEvent(
+            keyboardEventSource: source,
+            virtualKey: keyCode,
+            keyDown: true
+        ),
+        let keyUp = CGEvent(
+            keyboardEventSource: source,
+            virtualKey: keyCode,
+            keyDown: false
+        )
+    else {
+        fail(
+            code: "keyboard_event_creation_failed",
+            message: "Could not create a synthetic keyboard event."
+        )
+    }
+
+    keyDown.flags = flags
+    keyUp.flags = flags
+
+    keyDown.post(tap: .cghidEventTap)
+    Thread.sleep(forTimeInterval: 0.025)
+    keyUp.post(tap: .cghidEventTap)
+}
+
+private func postCommandKey(
+    _ keyCode: CGKeyCode
+) {
+    postKey(
+        keyCode,
+        flags: .maskCommand
+    )
+}
+
+private func postCommandA() {
+    postCommandKey(selectAllKeyCode)
+}
+
+private func postCommandC() {
+    postCommandKey(copyKeyCode)
+}
+
+private func postCommandV() {
+    postCommandKey(pasteKeyCode)
+}
+
+private func collapseSelectionToEnd() {
+    postKey(
+        rightArrowKeyCode,
+        flags: CGEventFlags(rawValue: 0)
+    )
+
+    Thread.sleep(forTimeInterval: 0.05)
+}
+
+private func waitForClipboardCopy(
+    pasteboard: NSPasteboard,
+    previousChangeCount: Int,
+    timeout: TimeInterval = 1.5
+) -> String? {
+    let deadline = Date().addingTimeInterval(timeout)
+
+    while Date() < deadline {
+        if
+            pasteboard.changeCount != previousChangeCount,
+            let value = pasteboard.string(forType: .string)
+        {
+            return value
+        }
+
+        Thread.sleep(forTimeInterval: 0.025)
+    }
+
+    return nil
+}
+
+private func copyEntirePromptSerialized(
+    from textArea: AXUIElement,
+    pasteboard: NSPasteboard
+) -> String? {
+    focusTextArea(textArea)
+
+    postCommandA()
+    Thread.sleep(forTimeInterval: 0.12)
+
+    pasteboard.clearContents()
+
+    let sentinel =
+        "__CODEX_PROMPT_COPY_SENTINEL_\(UUID().uuidString)__"
+
+    guard pasteboard.setString(
+        sentinel,
+        forType: .string
+    ) else {
+        return nil
+    }
+
+    let sentinelChangeCount = pasteboard.changeCount
+
+    postCommandC()
+
+    return waitForClipboardCopy(
+        pasteboard: pasteboard,
+        previousChangeCount: sentinelChangeCount
+    )
+}
+
+// MARK: - Paste verification
+
+private func waitForReplacement(
+    in textArea: AXUIElement,
+    expectedText: String
+) -> Bool {
+    let deadline = Date().addingTimeInterval(
+        pasteVerificationTimeout
+    )
+
+    while Date() < deadline {
+        if stringAttribute(
+            textArea,
+            kAXValueAttribute as CFString
+        ) == expectedText {
+            return true
+        }
+
+        Thread.sleep(forTimeInterval: 0.05)
+    }
+
+    return false
+}
+
+// MARK: - Commands
+
+private func permissionCommand() {
+    let trusted = requestAccessibilityPermission()
+
+    writeJSON([
+        "ok": true,
+        "trusted": trusted,
+        "message": trusted
+            ? "Accessibility permission is granted."
+            : "Accessibility permission has not been granted yet."
+    ])
+}
+
+private func doctorCommand(delay: TimeInterval) {
+    requireAccessibilityPermission()
+
+    let focused = findFocusedTextArea(delay: delay)
+
+    var response: [String: Any] = [
+        "ok": true,
+        "helperVersion": helperVersion,
+        "role": stringAttribute(
+            focused.element,
+            kAXRoleAttribute as CFString
+        ) ?? NSNull(),
+        "focused": boolAttribute(
+            focused.element,
+            kAXFocusedAttribute as CFString
+        ) ?? NSNull(),
+        "valueReadable": true,
+        "selectedTextRangeSettable": isAttributeSettable(
+            focused.element,
+            kAXSelectedTextRangeAttribute as CFString
+        ),
+        "textLength": focused.text.count,
+        "utf16Length": utf16Length(focused.text),
+        "accessibilityCharacterCount": integerAttribute(
+            focused.element,
+            kAXNumberOfCharactersAttribute as CFString
+        ) ?? NSNull()
+    ]
+
+    for (key, value) in applicationMetadata(focused.application) {
+        response[key] = value
+    }
+
+    writeJSON(response)
+}
+
+private func readCommand(delay: TimeInterval) {
+    requireAccessibilityPermission()
+
+    let focused = findFocusedTextArea(delay: delay)
+    let pasteboard = NSPasteboard.general
+    let clipboardSnapshots = captureClipboard(pasteboard)
+
+    guard let serializedText = copyEntirePromptSerialized(
+        from: focused.element,
+        pasteboard: pasteboard
+    ) else {
+        let restoreResult = restoreClipboard(
+            clipboardSnapshots,
+            pasteboard: pasteboard,
+            expectedTemporaryChangeCount: pasteboard.changeCount
+        )
+
+        fail(
+            code: "prompt_copy_failed",
+            message: """
+            Could not copy the complete serialized Codex prompt. Ensure the \
+            caret is inside the Codex composer.
+            """,
+            details: [
+                "clipboardRestored": restoreResult.restored
+            ]
+        )
+    }
+
+    let serializedClipboardChangeCount = pasteboard.changeCount
+
+    // Cmd+C leaves the complete prompt selected. Collapse the selection so
+    // the composer remains safe and editable after this command.
+    collapseSelectionToEnd()
+
+    let clipboardResult = restoreClipboard(
+        clipboardSnapshots,
+        pasteboard: pasteboard,
+        expectedTemporaryChangeCount:
+            serializedClipboardChangeCount
+    )
+
+    var response: [String: Any] = [
+        "ok": true,
+
+        // `text` remains the primary field consumed by the TypeScript
+        // extension. It now contains the canonical serialized form.
+        "text": serializedText,
+        "serializedText": serializedText,
+        "renderedText": focused.text,
+
+        "textLength": serializedText.count,
+        "serializedTextLength": serializedText.count,
+        "renderedTextLength": focused.text.count,
+
+        "serializedUtf16Length": utf16Length(serializedText),
+        "renderedUtf16Length": utf16Length(focused.text),
+
+        "role": stringAttribute(
+            focused.element,
+            kAXRoleAttribute as CFString
+        ) ?? NSNull(),
+
+        "clipboardRestored": clipboardResult.restored,
+        "clipboardRestoreSkippedBecauseChanged":
+            clipboardResult.skippedBecauseChanged
+    ]
+
+    for (key, value) in applicationMetadata(focused.application) {
+        response[key] = value
+    }
+
+    writeJSON(response)
+}
+
+private func replaceCommand(delay: TimeInterval) {
+    requireAccessibilityPermission()
+
+    let inputData = FileHandle.standardInput.readDataToEndOfFile()
+
+    let request: ReplaceRequest
+
+    do {
+        request = try JSONDecoder().decode(
+            ReplaceRequest.self,
+            from: inputData
+        )
+    } catch {
+        fail(
+            code: "invalid_replace_request",
+            message: """
+            Replace expects JSON containing expectedOriginalText, \
+            replacementText, and optional restoreClipboard.
+            """,
+            status: 64,
+            details: [
+                "decodeError": String(describing: error)
+            ]
+        )
+    }
+
+    guard !request.replacementText.isEmpty else {
+        fail(
+            code: "empty_replacement",
+            message: "Replacement text must not be empty.",
+            status: 64
+        )
+    }
+
+    let focused = findFocusedTextArea(delay: delay)
+    let pasteboard = NSPasteboard.general
+    let clipboardSnapshots = captureClipboard(pasteboard)
+
+    // AXValue is only the rendered projection and therefore cannot be
+    // compared with the serialized Markdown prompt. Verify the canonical
+    // prompt through Cursor's own copy pipeline instead.
+    guard let copiedOriginalText = copyEntirePromptSerialized(
+        from: focused.element,
+        pasteboard: pasteboard
+    ) else {
+        let restoreResult = restoreClipboard(
+            clipboardSnapshots,
+            pasteboard: pasteboard,
+            expectedTemporaryChangeCount: pasteboard.changeCount
+        )
+
+        fail(
+            code: "original_prompt_copy_failed",
+            message: """
+            Could not copy the complete serialized Codex prompt. No \
+            replacement was performed.
+            """,
+            details: [
+                "clipboardRestored": restoreResult.restored
+            ]
+        )
+    }
+
+    guard copiedOriginalText == request.expectedOriginalText else {
+        collapseSelectionToEnd()
+
+        let restoreResult = restoreClipboard(
+            clipboardSnapshots,
+            pasteboard: pasteboard,
+            expectedTemporaryChangeCount: pasteboard.changeCount
+        )
+
+        fail(
+            code: "stale_prompt",
+            message: """
+            The serialized Codex prompt changed after it was read. The \
+            replacement was cancelled to avoid overwriting newer text.
+            """,
+            details: [
+                "expectedLength": request.expectedOriginalText.count,
+                "copiedLength": copiedOriginalText.count,
+                "expectedUtf16Length":
+                    utf16Length(request.expectedOriginalText),
+                "copiedUtf16Length":
+                    utf16Length(copiedOriginalText),
+                "clipboardRestored": restoreResult.restored
+            ]
+        )
+    }
+
+    // Cmd+C leaves the complete prompt selected. Replace the clipboard with
+    // the enhanced serialized prompt and paste through Cursor's normal input
+    // pipeline so Markdown references become clickable again.
+    pasteboard.clearContents()
+
+    guard pasteboard.setString(
+        request.replacementText,
+        forType: .string
+    ) else {
+        collapseSelectionToEnd()
+
+        let restoreResult = restoreClipboard(
+            clipboardSnapshots,
+            pasteboard: pasteboard,
+            expectedTemporaryChangeCount: pasteboard.changeCount
+        )
+
+        fail(
+            code: "temporary_clipboard_write_failed",
+            message: "Could not write replacement text to the clipboard.",
+            details: [
+                "clipboardRestored": restoreResult.restored
+            ]
+        )
+    }
+
+    postCommandV()
+
+    // Allow the Codex composer to parse pasted Markdown references and
+    // reconstruct its internal reference nodes.
+    Thread.sleep(forTimeInterval: 0.3)
+
+    // Verify through the same serialized copy representation used for reading.
+    guard let copiedReplacementText = copyEntirePromptSerialized(
+        from: focused.element,
+        pasteboard: pasteboard
+    ) else {
+        collapseSelectionToEnd()
+
+        let restoreResult = restoreClipboard(
+            clipboardSnapshots,
+            pasteboard: pasteboard,
+            expectedTemporaryChangeCount: pasteboard.changeCount
+        )
+
+        fail(
+            code: "replacement_copy_failed",
+            message: """
+            The replacement was pasted, but its serialized form could not be \
+            copied for verification.
+            """,
+            details: [
+                "clipboardRestored": restoreResult.restored
+            ]
+        )
+    }
+
+    let replacementVerified =
+        copiedReplacementText == request.replacementText
+
+    let verificationClipboardChangeCount = pasteboard.changeCount
+
+    // Leave the caret at the end rather than leaving the complete prompt
+    // selected after verification.
+    collapseSelectionToEnd()
+
+    let shouldRestoreClipboard = request.restoreClipboard ?? true
+
+    let clipboardResult: ClipboardRestoreResult
+
+    if shouldRestoreClipboard {
+        clipboardResult = restoreClipboard(
+            clipboardSnapshots,
+            pasteboard: pasteboard,
+            expectedTemporaryChangeCount:
+                verificationClipboardChangeCount
+        )
+    } else {
+        clipboardResult = ClipboardRestoreResult(
+            restored: false,
+            skippedBecauseChanged: false
+        )
+    }
+
+    guard replacementVerified else {
+        fail(
+            code: "paste_verification_failed",
+            message: """
+            Cursor accepted the pasted prompt, but its serialized value did \
+            not exactly match the requested replacement.
+            """,
+            details: [
+                "expectedReplacementLength":
+                    request.replacementText.count,
+                "copiedReplacementLength":
+                    copiedReplacementText.count,
+                "expectedReplacementUtf16Length":
+                    utf16Length(request.replacementText),
+                "copiedReplacementUtf16Length":
+                    utf16Length(copiedReplacementText),
+                "clipboardRestored": clipboardResult.restored,
+                "clipboardRestoreSkippedBecauseChanged":
+                    clipboardResult.skippedBecauseChanged
+            ]
+        )
+    }
+
+    var response: [String: Any] = [
+        "ok": true,
+        "selectionMethod": "command-a-copy-serialized",
+        "selectionVerified": true,
+        "verificationMethod": "command-a-copy-serialized",
+        "replacementVerified": true,
+        "originalLength": copiedOriginalText.count,
+        "replacementLength": request.replacementText.count,
+        "clipboardRestored": clipboardResult.restored,
+        "clipboardRestoreSkippedBecauseChanged":
+            clipboardResult.skippedBecauseChanged
+    ]
+
+    for (key, value) in applicationMetadata(focused.application) {
+        response[key] = value
+    }
+
+    writeJSON(response)
+}
+
+private func usage() -> Never {
+    fail(
+        code: "usage",
+        message: """
+        Usage:
+          prompt-accessibility-helper version
+          prompt-accessibility-helper permission
+          prompt-accessibility-helper doctor [delay-seconds]
+          prompt-accessibility-helper read [delay-seconds]
+          prompt-accessibility-helper replace [delay-seconds]
+
+        replace reads this JSON object from stdin:
+          {
+            "expectedOriginalText": "...",
+            "replacementText": "...",
+            "restoreClipboard": true
+          }
+        """,
+        status: 64
+    )
+}
+
+// MARK: - Entry point
+
+let arguments = CommandLine.arguments
+
+guard arguments.count >= 2 else {
+    usage()
+}
+
+let command = arguments[1]
+let delay = parseDelay(arguments)
+
+switch command {
+case "version":
+    writeJSON([
+        "ok": true,
+        "version": helperVersion
+    ])
+
+case "permission":
+    permissionCommand()
+
+case "doctor":
+    doctorCommand(delay: delay)
+
+case "read":
+    readCommand(delay: delay)
+
+case "replace":
+    replaceCommand(delay: delay)
+
+default:
+    usage()
+}

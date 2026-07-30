@@ -1,0 +1,104 @@
+{
+  "name": "codex-prompt-enhancer",
+  "displayName": "Codex Prompt Enhancer",
+  "description": "Enhances the current unsent Codex prompt in Cursor on macOS while preserving inline references and attachment chips.",
+  "version": "0.1.0",
+  "publisher": "sanguinesadness",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "extensionKind": [
+    "ui"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:codexPromptEnhancer.enhanceCurrentPrompt",
+    "onCommand:codexPromptEnhancer.testCodexRunner"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "codexPromptEnhancer.enhanceCurrentPrompt",
+        "title": "Enhance Current Prompt",
+        "category": "Codex Prompt Enhancer"
+      },
+      {
+        "command": "codexPromptEnhancer.testCodexRunner",
+        "title": "Test Codex CLI Runner",
+        "category": "Codex Prompt Enhancer"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "codexPromptEnhancer.enhanceCurrentPrompt",
+        "key": "ctrl+shift+r",
+        "mac": "cmd+shift+r",
+        "when": "isMac"
+      }
+    ],
+    "configuration": {
+      "title": "Codex Prompt Enhancer",
+      "properties": {
+        "codexPromptEnhancer.codexPath": {
+          "type": "string",
+          "default": "~/.local/bin/codex",
+          "description": "Absolute path or home-relative path to the Codex CLI executable."
+        },
+        "codexPromptEnhancer.model": {
+          "type": "string",
+          "default": "gpt-5.6-luna",
+          "description": "Codex model used only for prompt enhancement. Leave empty to use the Codex CLI default."
+        },
+        "codexPromptEnhancer.reasoningEffort": {
+          "type": "string",
+          "enum": [
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "default": "low",
+          "description": "Reasoning effort used for prompt enhancement."
+        },
+        "codexPromptEnhancer.timeoutSeconds": {
+          "type": "number",
+          "default": 90,
+          "minimum": 10,
+          "maximum": 300,
+          "description": "Maximum number of seconds allowed for one enhancement request."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "clean": "rm -rf dist",
+    "compile": "tsc -p ./",
+    "watch": "tsc --watch -p ./",
+    "check": "npm run clean && npm run compile",
+    "vscode:prepublish": "npm run build",
+    "build:native": "bash scripts/build-native-helper.sh",
+    "build": "npm run build:native && npm run check",
+    "package:vsix": "bash scripts/package-local.sh",
+    "install:local": "bash scripts/install-local.sh"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.9.2",
+    "typescript": "^5.9.0"
+  },
+  "keywords": [
+    "codex",
+    "cursor",
+    "prompt",
+    "prompt enhancement",
+    "macos"
+  ]
+}

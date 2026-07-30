@@ -1,0 +1,61 @@
+AM docs/app-bootstrap-as-is.md
+AM docs/app-bootstrap-refactor-handoff.md
+A  docs/app-bootstrap-to-be.md
+ M pages/_app.tsx
+ M public/configs/config.local.json
+ M src/components/AppBootstrap/AppBootstrap.tsx
+ M src/components/AppProviders/AppInfrastructureProviders.tsx
+ M src/components/AppProviders/AuthenticatedAppProviders.tsx
+ M src/components/AppProviders/RoleRuntimeProviders.tsx
+ M src/components/OfflineFallbackScreen/OfflineFallbackScreen.module.scss
+ M src/components/OfflineFallbackScreen/OfflineFallbackScreen.tsx
+ M src/config/baseAppConfig.ts
+ M src/hooks/useOfflineRouteGuard.ts
+ M src/hooks/useProjectTypeStyles.ts
+ M src/pwa/__tests__/offline.test.ts
+ M src/pwa/__tests__/serviceWorkerRegistration.test.ts
+ M src/pwa/brandConfig.ts
+ M src/pwa/components/PwaServiceWorkerProvider/__tests__/PwaServiceWorkerProvider.test.tsx
+ M src/pwa/components/PwaServiceWorkerProvider/index.tsx
+ M src/pwa/offline.ts
+ M src/pwa/serviceWorkerRegistration.ts
+ M src/pwa/sw.ts
+ M src/state/backgroundProcesses/actions.ts
+ M src/state/backgroundProcesses/pollingSagas.ts
+ M src/state/backgroundProcesses/reducer.ts
+ M src/state/backgroundProcesses/sagas.ts
+ M src/state/bootstrap/actions.ts
+ M src/state/bootstrap/errors.ts
+ M src/state/bootstrap/flows.ts
+ M src/state/bootstrap/index.ts
+ M src/state/bootstrap/reducer.ts
+ M src/state/bootstrap/routeDecision.ts
+ M src/state/bootstrap/sagas.ts
+ M src/state/bootstrap/selectors.ts
+ M src/state/bootstrap/steps/bootstrapCompany.ts
+ M src/state/bootstrap/steps/bootstrapRole.ts
+ M src/state/bootstrap/steps/computeAndSaveRouteDecision.ts
+ M src/state/bootstrap/steps/prepareStartupInputs.ts
+ M src/state/bootstrap/steps/restoreSession.ts
+ M src/state/bootstrap/types.ts
+ M src/state/configs/actions.ts
+ M src/state/configs/reducers.ts
+ M src/state/configs/sagas.ts
+ M src/state/rootReducer.ts
+?? docs/app-bootstrap-migration-prompts.md
+?? src/components/AppBootstrap/__tests__/
+?? src/components/AppLayoutResolver/__tests__/
+?? src/components/AppProviders/__tests__/
+?? src/components/Company/CustomerCompanyRuntime/
+?? src/components/OfflineFallbackScreen/__tests__/
+?? src/config/__tests__/
+?? src/config/appConfigValidation.ts
+?? src/config/runtimeAppConfig.ts
+?? src/hooks/__tests__/useOfflineRouteGuard.test.ts
+?? src/pwa/__tests__/swContext.test.ts
+?? src/state/backgroundProcesses/__tests__/
+?? src/state/bootstrap/__tests__/
+?? src/state/bootstrap/sagaHelpers.ts
+?? src/state/configs/__tests__/reducers.test.ts
+?? src/state/configs/__tests__/sagas.test.ts
+?? src/state/configs/errors.ts

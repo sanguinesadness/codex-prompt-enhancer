@@ -1,0 +1,1 @@
+{"expectedOriginalText": "LoginPageContent\nAX_REFERENCE_HELPER_ORIGINAL: Tell me what happens here.\nAlso inspect \n\nindex.tsx\n and explain how it is connected.", "replacementText": "LoginPageContent\nAX_REFERENCE_HELPER_REPLACED: Explain how this code works.\nAlso inspect \n\nindex.tsx\n and explain how it is connected.", "restoreClipboard": true}
