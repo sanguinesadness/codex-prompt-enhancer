@@ -16,6 +16,8 @@ Verify it:
 "$HOME/.local/bin/codex" --version
 ```
 
+Version `0.145.0` or newer is required. The extension checks the configured CLI on the first enhancement attempt and refuses older or unrecognized versions because they cannot guarantee the required tool restrictions.
+
 The CLI must already be authenticated through your ChatGPT/OpenAI account.
 
 To use a different path, change:

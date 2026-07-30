@@ -16,21 +16,32 @@ import {
 
 import * as vscode from "vscode";
 
+import { buildCodexEnvironment } from "./childEnvironment";
 import { getCodexRunnerConfiguration } from "./configuration";
 import {
   buildCodexArguments,
   buildEnhancementRequest,
 } from "./codexRequest";
 import {
-  appendBounded,
-  truncateDiagnostic,
-} from "./processDiagnostics";
+  isSupportedCodexVersion,
+  MINIMUM_CODEX_VERSION,
+  parseCodexVersionOutput,
+} from "./codexVersion";
 
 const TEMP_DIRECTORY_PREFIX =
   "codex-prompt-enhancer-";
 
 const OUTPUT_FILENAME =
   "enhanced-prompt.txt";
+
+const VERSION_CHECK_TIMEOUT_MS = 5_000;
+const MAX_VERSION_STDOUT_BYTES = 256;
+
+type SafeDiagnosticValue =
+  string | number | boolean;
+
+export type SafeCodexDiagnosticMetadata =
+  Readonly<Record<string, SafeDiagnosticValue>>;
 
 export interface CodexEnhancementResult {
   readonly text: string;
@@ -43,7 +54,8 @@ export class CodexRunnerError extends Error {
   public constructor(
     public readonly code: string,
     message: string,
-    public readonly diagnostics?: string,
+    public readonly metadata?:
+      SafeCodexDiagnosticMetadata,
   ) {
     super(message);
     this.name = "CodexRunnerError";
@@ -51,6 +63,9 @@ export class CodexRunnerError extends Error {
 }
 
 export class CodexRunner {
+  private readonly versionChecks =
+    new Map<string, Promise<string>>();
+
   public constructor(
     private readonly output: vscode.OutputChannel,
   ) {}
@@ -76,6 +91,16 @@ export class CodexRunner {
       configuration.codexPath,
     );
 
+    const environment = buildCodexEnvironment(
+      process.env,
+    );
+
+    const cliVersion =
+      await this.getSupportedVersion(
+        configuration.codexPath,
+        environment,
+      );
+
     if (cancellationToken.isCancellationRequested) {
       throw new vscode.CancellationError();
     }
@@ -99,6 +124,7 @@ export class CodexRunner {
       [
         `[${new Date().toISOString()}]`,
         "Starting Codex enhancement.",
+        `cliVersion=${cliVersion}`,
         `model=${configuration.model ?? "<default>"}`,
         `reasoning=${configuration.reasoningEffort}`,
       ].join(" "),
@@ -119,6 +145,8 @@ export class CodexRunner {
         executable: configuration.codexPath,
         args,
         stdin: request,
+        environment,
+        cliVersion,
         timeoutMilliseconds:
           configuration.timeoutMilliseconds,
         cancellationToken,
@@ -128,9 +156,13 @@ export class CodexRunner {
         throw new CodexRunnerError(
           "codex_process_failed",
           `Codex exited with code ${processResult.exitCode}.`,
-          truncateDiagnostic(
-            processResult.stderr,
-          ),
+          {
+            stage: "enhancement",
+            exitCode: processResult.exitCode,
+            stdoutBytes: processResult.stdoutBytes,
+            stderrBytes: processResult.stderrBytes,
+            cliVersion,
+          },
         );
       }
 
@@ -145,7 +177,11 @@ export class CodexRunner {
         throw new CodexRunnerError(
           "codex_output_missing",
           "Codex completed without producing a final output file.",
-          getErrorMessage(error),
+          {
+            stage: "read_output",
+            errorCode: getSystemErrorCode(error),
+            cliVersion,
+          },
         );
       }
 
@@ -156,6 +192,10 @@ export class CodexRunner {
         throw new CodexRunnerError(
           "empty_codex_output",
           "Codex returned an empty enhanced prompt.",
+          {
+            stage: "read_output",
+            cliVersion,
+          },
         );
       }
 
@@ -188,12 +228,38 @@ export class CodexRunner {
       );
     }
   }
+
+  private getSupportedVersion(
+    executable: string,
+    environment: NodeJS.ProcessEnv,
+  ): Promise<string> {
+    const existing = this.versionChecks.get(
+      executable,
+    );
+
+    if (existing !== undefined) {
+      return existing;
+    }
+
+    const check = verifySupportedCodexVersion(
+      executable,
+      environment,
+    ).catch((error: unknown) => {
+      this.versionChecks.delete(executable);
+      throw error;
+    });
+
+    this.versionChecks.set(executable, check);
+    return check;
+  }
 }
 
 interface ProcessOptions {
   readonly executable: string;
   readonly args: readonly string[];
   readonly stdin: string;
+  readonly environment: NodeJS.ProcessEnv;
+  readonly cliVersion: string;
   readonly timeoutMilliseconds: number;
   readonly cancellationToken:
     vscode.CancellationToken;
@@ -201,13 +267,23 @@ interface ProcessOptions {
 
 interface ProcessResult {
   readonly exitCode: number;
-  readonly stdout: string;
-  readonly stderr: string;
+  readonly stdoutBytes: number;
+  readonly stderrBytes: number;
+}
+
+interface ChildExit {
+  readonly exitCode: number | null;
+  readonly signal: NodeJS.Signals | null;
 }
 
 interface MutableProcessState {
   cancelled: boolean;
   timedOut: boolean;
+}
+
+interface VersionProcessState {
+  timedOut: boolean;
+  stdoutLimitExceeded: boolean;
 }
 
 async function verifyCodexExecutable(
@@ -221,11 +297,168 @@ async function verifyCodexExecutable(
   } catch {
     throw new CodexRunnerError(
       "codex_not_executable",
-      [
-        "Codex CLI was not found or is not executable:",
-        executablePath,
-      ].join("\n"),
+      "The configured Codex CLI executable was not found or is not executable.",
+      {
+        stage: "executable_check",
+      },
     );
+  }
+}
+
+async function verifySupportedCodexVersion(
+  executable: string,
+  environment: NodeJS.ProcessEnv,
+): Promise<string> {
+  const child = spawn(
+    executable,
+    ["--version"],
+    {
+      cwd: os.homedir(),
+      env: environment,
+      shell: false,
+      stdio: [
+        "pipe",
+        "pipe",
+        "pipe",
+      ],
+    },
+  );
+
+  const state: VersionProcessState = {
+    timedOut: false,
+    stdoutLimitExceeded: false,
+  };
+
+  let stdout = "";
+  let stdoutBytes = 0;
+  let stderrBytes = 0;
+
+  child.stdout.setEncoding("utf8");
+
+  child.stdout.on(
+    "data",
+    (chunk: string) => {
+      stdoutBytes += Buffer.byteLength(
+        chunk,
+        "utf8",
+      );
+
+      if (
+        state.stdoutLimitExceeded
+        || stdoutBytes > MAX_VERSION_STDOUT_BYTES
+      ) {
+        state.stdoutLimitExceeded = true;
+        return;
+      }
+
+      stdout += chunk;
+    },
+  );
+
+  child.stderr.on(
+    "data",
+    (chunk: Buffer) => {
+      stderrBytes += chunk.length;
+    },
+  );
+
+  const timeout = setTimeout(() => {
+    state.timedOut = true;
+    terminateProcess(child);
+  }, VERSION_CHECK_TIMEOUT_MS);
+
+  try {
+    child.stdin.end();
+
+    const exit = await waitForVersionExit(child);
+
+    if (state.timedOut) {
+      throw new CodexRunnerError(
+        "codex_version_check_timeout",
+        "Checking the Codex CLI version timed out.",
+        {
+          stage: "version_check",
+          timeoutMilliseconds:
+            VERSION_CHECK_TIMEOUT_MS,
+          stdoutBytes,
+          stderrBytes,
+        },
+      );
+    }
+
+    if (state.stdoutLimitExceeded) {
+      throw new CodexRunnerError(
+        "codex_version_invalid",
+        "The Codex CLI returned an invalid version response.",
+        {
+          stage: "version_check",
+          exitCode: exit.exitCode ?? 0,
+          stdoutBytes,
+          stderrBytes,
+        },
+      );
+    }
+
+    if (exit.signal !== null) {
+      throw new CodexRunnerError(
+        "codex_version_check_terminated",
+        `The Codex CLI version check terminated with signal ${exit.signal}.`,
+        {
+          stage: "version_check",
+          signal: exit.signal,
+          stdoutBytes,
+          stderrBytes,
+        },
+      );
+    }
+
+    const exitCode = exit.exitCode ?? 1;
+
+    if (exitCode !== 0) {
+      throw new CodexRunnerError(
+        "codex_version_check_failed",
+        "Could not determine the Codex CLI version.",
+        {
+          stage: "version_check",
+          exitCode,
+          stdoutBytes,
+          stderrBytes,
+        },
+      );
+    }
+
+    const version = parseCodexVersionOutput(stdout);
+
+    if (version === undefined) {
+      throw new CodexRunnerError(
+        "codex_version_invalid",
+        "The Codex CLI returned an unrecognized version response.",
+        {
+          stage: "version_check",
+          exitCode,
+          stdoutBytes,
+          stderrBytes,
+        },
+      );
+    }
+
+    if (!isSupportedCodexVersion(version)) {
+      throw new CodexRunnerError(
+        "codex_version_unsupported",
+        [
+          `Codex CLI ${MINIMUM_CODEX_VERSION} or newer is required.`,
+          "Update the configured Codex CLI and try again.",
+        ].join(" "),
+        {
+          stage: "version_check",
+          cliVersion: version,
+        },
+      );
+    }
+
+    return version;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -237,7 +470,7 @@ async function runCodexProcess(
     [...options.args],
     {
       cwd: os.homedir(),
-      env: process.env,
+      env: options.environment,
       shell: false,
       stdio: [
         "pipe",
@@ -252,29 +485,20 @@ async function runCodexProcess(
     timedOut: false,
   };
 
-  let stdout = "";
-  let stderr = "";
-
-  child.stdout.setEncoding("utf8");
-  child.stderr.setEncoding("utf8");
+  let stdoutBytes = 0;
+  let stderrBytes = 0;
 
   child.stdout.on(
     "data",
-    (chunk: string) => {
-      stdout = appendBounded(
-        stdout,
-        chunk,
-      );
+    (chunk: Buffer) => {
+      stdoutBytes += chunk.length;
     },
   );
 
   child.stderr.on(
     "data",
-    (chunk: string) => {
-      stderr = appendBounded(
-        stderr,
-        chunk,
-      );
+    (chunk: Buffer) => {
+      stderrBytes += chunk.length;
     },
   );
 
@@ -293,7 +517,10 @@ async function runCodexProcess(
   try {
     child.stdin.end(options.stdin);
 
-    const exitCode = await waitForExit(child);
+    const exit = await waitForCodexExit(
+      child,
+      options.cliVersion,
+    );
 
     if (state.cancelled) {
       throw new vscode.CancellationError();
@@ -308,14 +535,35 @@ async function runCodexProcess(
             options.timeoutMilliseconds / 1_000,
           )} seconds.`,
         ].join(" "),
-        truncateDiagnostic(stderr),
+        {
+          stage: "enhancement",
+          timeoutMilliseconds:
+            options.timeoutMilliseconds,
+          stdoutBytes,
+          stderrBytes,
+          cliVersion: options.cliVersion,
+        },
       );
     }
 
+    if (exit.signal !== null) {
+      throw new CodexRunnerError(
+        "codex_terminated",
+        `Codex terminated with signal ${exit.signal}.`,
+        {
+          stage: "enhancement",
+          signal: exit.signal,
+          cliVersion: options.cliVersion,
+        },
+      );
+    }
+
+    const exitCode = exit.exitCode ?? 1;
+
     return {
       exitCode,
-      stdout,
-      stderr,
+      stdoutBytes,
+      stderrBytes,
     };
   } finally {
     clearTimeout(timeout);
@@ -323,19 +571,22 @@ async function runCodexProcess(
   }
 }
 
-function waitForExit(
+function waitForVersionExit(
   child: ChildProcessWithoutNullStreams,
-): Promise<number> {
-  return new Promise<number>(
+): Promise<ChildExit> {
+  return new Promise<ChildExit>(
     (resolve, reject) => {
       child.once(
         "error",
         (error: Error) => {
           reject(
             new CodexRunnerError(
-              "codex_spawn_failed",
-              "Failed to start the Codex CLI process.",
-              error.message,
+              "codex_version_check_failed",
+              "Failed to start the Codex CLI version check.",
+              {
+                stage: "version_check",
+                errorCode: getSystemErrorCode(error),
+              },
             ),
           );
         },
@@ -347,17 +598,49 @@ function waitForExit(
           code: number | null,
           signal: NodeJS.Signals | null,
         ) => {
-          if (code !== null) {
-            resolve(code);
-            return;
-          }
+          resolve({
+            exitCode: code,
+            signal,
+          });
+        },
+      );
+    },
+  );
+}
 
+function waitForCodexExit(
+  child: ChildProcessWithoutNullStreams,
+  cliVersion: string,
+): Promise<ChildExit> {
+  return new Promise<ChildExit>(
+    (resolve, reject) => {
+      child.once(
+        "error",
+        (error: Error) => {
           reject(
             new CodexRunnerError(
-              "codex_terminated",
-              `Codex terminated with signal ${signal ?? "unknown"}.`,
+              "codex_spawn_failed",
+              "Failed to start the Codex CLI process.",
+              {
+                stage: "enhancement",
+                errorCode: getSystemErrorCode(error),
+                cliVersion,
+              },
             ),
           );
+        },
+      );
+
+      child.once(
+        "close",
+        (
+          code: number | null,
+          signal: NodeJS.Signals | null,
+        ) => {
+          resolve({
+            exitCode: code,
+            signal,
+          });
         },
       );
     },
@@ -376,6 +659,10 @@ function terminateProcess(
   const forceKillTimeout =
     setTimeout(() => {
       if (child.exitCode === null) {
+        if (child.signalCode !== null) {
+          return;
+        }
+
         child.kill("SIGKILL");
       }
     }, 2_000);
@@ -383,12 +670,17 @@ function terminateProcess(
   forceKillTimeout.unref();
 }
 
-function getErrorMessage(
+function getSystemErrorCode(
   error: unknown,
 ): string {
-  if (error instanceof Error) {
-    return error.message;
+  if (
+    typeof error === "object"
+    && error !== null
+    && "code" in error
+    && typeof error.code === "string"
+  ) {
+    return error.code;
   }
 
-  return String(error);
+  return "unknown";
 }

@@ -31,17 +31,56 @@ export function tryParsePayload(
   }
 }
 
-export function removePromptFields(
+const SAFE_HELPER_DIAGNOSTIC_KEYS = new Set([
+  "applicationName",
+  "bundleIdentifier",
+  "pid",
+  "role",
+  "focused",
+  "valueReadable",
+  "selectedTextRangeSettable",
+  "textLength",
+  "utf16Length",
+  "accessibilityCharacterCount",
+  "clipboardRestored",
+  "clipboardRestoreSkippedBecauseChanged",
+  "expectedLength",
+  "copiedLength",
+  "expectedUtf16Length",
+  "copiedUtf16Length",
+  "expectedReplacementLength",
+  "copiedReplacementLength",
+  "expectedReplacementUtf16Length",
+  "copiedReplacementUtf16Length",
+  "stdoutBytes",
+  "stderrBytes",
+  "exitCode",
+  "errorCode",
+  "signal",
+  "timeoutMilliseconds",
+]);
+
+export function extractSafeHelperDiagnostics(
   payload: HelperPayload,
 ): Readonly<Record<string, unknown>> {
-  const {
-    text: _text,
-    serializedText: _serializedText,
-    renderedText: _renderedText,
-    expectedOriginalText: _expectedOriginalText,
-    replacementText: _replacementText,
-    ...safeFields
-  } = payload;
+  const safeFields: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(payload)) {
+    if (
+      SAFE_HELPER_DIAGNOSTIC_KEYS.has(key)
+      && isSafeDiagnosticValue(value)
+    ) {
+      safeFields[key] = value;
+    }
+  }
 
   return safeFields;
+}
+
+function isSafeDiagnosticValue(
+  value: unknown,
+): value is string | number | boolean {
+  return typeof value === "string"
+    || typeof value === "number"
+    || typeof value === "boolean";
 }

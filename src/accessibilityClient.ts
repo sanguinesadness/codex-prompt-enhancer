@@ -11,19 +11,16 @@ import {
 import * as vscode from "vscode";
 
 import {
-  removePromptFields,
+  extractSafeHelperDiagnostics,
   tryParsePayload,
 } from "./accessibilityProtocol";
-import {
-  appendBounded,
-  truncateDiagnostic,
-} from "./processDiagnostics";
+import { buildHelperEnvironment } from "./childEnvironment";
 
 const DEFAULT_HELPER_TIMEOUT_MS = 15_000;
 
 // The helper returns structured JSON containing the composer text.
 // This must not use the small rolling diagnostics buffer.
-const MAX_HELPER_STDOUT_LENGTH =
+const MAX_HELPER_STDOUT_BYTES =
   4 * 1024 * 1024;
 
 export interface AccessibilityReadResult {
@@ -52,7 +49,8 @@ interface ProcessState {
 interface ProcessResult {
   readonly exitCode: number;
   readonly stdout: string;
-  readonly stderr: string;
+  readonly stdoutBytes: number;
+  readonly stderrBytes: number;
 }
 
 export class AccessibilityClientError extends Error {
@@ -168,7 +166,7 @@ export class AccessibilityClient {
           typeof payload.message === "string"
             ? payload.message
             : "The native helper failed.",
-          removePromptFields(payload),
+          extractSafeHelperDiagnostics(payload),
         );
       }
 
@@ -176,11 +174,9 @@ export class AccessibilityClient {
         "native_helper_failed",
         `The native helper exited with code ${processResult.exitCode}.`,
         {
-          stdoutLength:
-            processResult.stdout.length,
-          stderr: truncateDiagnostic(
-            processResult.stderr,
-          ),
+          exitCode: processResult.exitCode,
+          stdoutBytes: processResult.stdoutBytes,
+          stderrBytes: processResult.stderrBytes,
         },
       );
     }
@@ -190,9 +186,8 @@ export class AccessibilityClient {
         "invalid_helper_output",
         "The native helper returned invalid JSON.",
         {
-          stderr: truncateDiagnostic(
-            processResult.stderr,
-          ),
+          stdoutBytes: processResult.stdoutBytes,
+          stderrBytes: processResult.stderrBytes,
         },
       );
     }
@@ -205,7 +200,7 @@ export class AccessibilityClient {
         typeof payload.message === "string"
           ? payload.message
           : "The native helper reported failure.",
-        removePromptFields(payload),
+        extractSafeHelperDiagnostics(payload),
       );
     }
 
@@ -238,7 +233,7 @@ async function runProcess(
     [...options.args],
     {
       cwd: path.dirname(options.executable),
-      env: process.env,
+      env: buildHelperEnvironment(process.env),
       shell: false,
       stdio: [
         "pipe",
@@ -255,7 +250,8 @@ async function runProcess(
   };
 
   let stdout = "";
-  let stderr = "";
+  let stdoutBytes = 0;
+  let stderrBytes = 0;
 
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
@@ -263,13 +259,17 @@ async function runProcess(
   child.stdout.on(
     "data",
     (chunk: string) => {
+      stdoutBytes += Buffer.byteLength(
+        chunk,
+        "utf8",
+      );
+
       if (state.stdoutLimitExceeded) {
         return;
       }
 
       if (
-        stdout.length + chunk.length
-        > MAX_HELPER_STDOUT_LENGTH
+        stdoutBytes > MAX_HELPER_STDOUT_BYTES
       ) {
         state.stdoutLimitExceeded = true;
         return;
@@ -282,7 +282,10 @@ async function runProcess(
   child.stderr.on(
     "data",
     (chunk: string) => {
-      stderr = appendBounded(stderr, chunk);
+      stderrBytes += Buffer.byteLength(
+        chunk,
+        "utf8",
+      );
     },
   );
 
@@ -316,6 +319,12 @@ async function runProcess(
             options.timeoutMilliseconds / 1_000,
           )} seconds.`,
         ].join(" "),
+        {
+          timeoutMilliseconds:
+            options.timeoutMilliseconds,
+          stdoutBytes,
+          stderrBytes,
+        },
       );
     }
 
@@ -325,18 +334,23 @@ async function runProcess(
         [
           "The native helper response exceeded",
           `${Math.round(
-            MAX_HELPER_STDOUT_LENGTH
+            MAX_HELPER_STDOUT_BYTES
               / 1024
               / 1024,
           )} MB.`,
         ].join(" "),
+        {
+          stdoutBytes,
+          stderrBytes,
+        },
       );
     }
 
     return {
       exitCode,
       stdout,
-      stderr,
+      stdoutBytes,
+      stderrBytes,
     };
   } finally {
     clearTimeout(timeout);
@@ -357,7 +371,7 @@ function waitForExit(
               "native_helper_spawn_failed",
               "Failed to start the native helper.",
               {
-                cause: error.message,
+                errorCode: getSystemErrorCode(error),
               },
             ),
           );
@@ -379,12 +393,25 @@ function waitForExit(
             new AccessibilityClientError(
               "native_helper_terminated",
               `The native helper terminated with signal ${signal ?? "unknown"}.`,
+              signal === null
+                ? undefined
+                : { signal },
             ),
           );
         },
       );
     },
   );
+}
+
+function getSystemErrorCode(
+  error: Error,
+): string {
+  const code = (error as NodeJS.ErrnoException).code;
+
+  return typeof code === "string"
+    ? code
+    : "unknown";
 }
 
 function terminateProcess(
@@ -399,6 +426,10 @@ function terminateProcess(
   const forceKillTimeout =
     setTimeout(() => {
       if (child.exitCode === null) {
+        if (child.signalCode !== null) {
+          return;
+        }
+
         child.kill("SIGKILL");
       }
     }, 2_000);

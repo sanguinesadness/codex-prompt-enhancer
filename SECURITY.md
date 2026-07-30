@@ -33,16 +33,19 @@ Do not include real secrets or sensitive prompt content. Use synthetic examples.
 The project reduces risk by:
 
 - spawning Codex without a shell;
+- requiring Codex CLI 0.145.0 or newer;
 - sending prompts through stdin;
 - running in a temporary directory;
 - using a read-only sandbox;
+- disabling Codex execution, browser, app, computer-use, multi-agent, hook, and workspace-dependency capabilities;
+- passing only allowlisted environment variables to child processes;
 - using ephemeral sessions;
 - hiding inline reference paths from the model;
 - not inspecting attachment contents;
 - not sending prompts automatically;
 - refusing stale or unverifiable replacements;
 - restoring the clipboard;
-- avoiding prompt content in logs.
+- recording only structured, allowlisted failure metadata rather than raw child-process output.
 
 ## Important trust boundaries
 
