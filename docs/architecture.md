@@ -29,7 +29,7 @@ The extension:
 
 The Swift helper locates the frontmost Cursor process and validates that the explicitly focused accessibility element is a readable, enabled, selectable `AXTextArea`. Cursor does not consistently expose composer-specific semantic labels on the focused field, so direct focus is treated as the user’s targeting signal.
 
-Known editor, terminal, search, quick-input, output, debug, rename, and SCM contexts are rejected. If Cursor explicitly reports another focused control, the helper fails instead of searching for and focusing a different text area.
+Known editor, terminal, search, quick-input, output, debug, rename, and SCM contexts are rejected when Cursor exposes those identifiers through Accessibility. Because the real composer may expose no semantic label, an explicitly focused readable and selectable `AXTextArea` remains eligible unless a forbidden context is detected. If Cursor explicitly reports another focused control, the helper fails instead of searching for and focusing a different text area.
 
 Window traversal remains available only when `AXFocusedUIElement` cannot be resolved. Unlike direct focus, a fallback candidate must have strong Codex-specific semantic evidence, composer-like geometry, the minimum score, and an unambiguous score margin.
 
@@ -184,7 +184,7 @@ It aborts when:
 
 - Accessibility permission is missing;
 - renderer accessibility was not enabled;
-- the focused element is not the Codex composer;
+- the focused element is structurally invalid or exposes a forbidden context;
 - the prompt is empty;
 - Codex cannot start;
 - Codex times out;

@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Validates focused and fallback composer targets, rejects known non-composer contexts, and binds replacement to the exact composer fingerprint read at the start of enhancement.
+- Validates focused and fallback composer targets, rejects identifiable non-composer contexts, and binds replacement to the exact composer fingerprint read at the start of enhancement.
 - Accepts Cursor’s directly focused composer when its accessibility tree omits composer-specific semantic labels.
 - Adds native Swift regression tests for composer evidence, fallback geometry, ambiguity handling, and target fingerprinting.
 - Requires Codex CLI 0.145.0 or newer and disables shell, browser, app, computer-use, multi-agent, hook, and workspace-dependency capabilities during prompt enhancement.

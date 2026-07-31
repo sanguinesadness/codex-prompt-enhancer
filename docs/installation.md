@@ -59,7 +59,18 @@ The skill should:
 
 ## 3. Install the extension
 
-### Option A: install a release VSIX
+### Option A: install from the Cursor Marketplace
+
+In Cursor:
+
+1. Open **Extensions**.
+2. Search for **Codex Prompt Enhancer**.
+3. Confirm the publisher is `sanguinesadness`.
+4. Select **Install**.
+
+Marketplace installations can use Cursor’s **Auto Update** option. A GitHub push does not update the Marketplace package automatically; the maintainer must publish a new extension version first.
+
+### Option B: install a release VSIX
 
 Download the macOS VSIX matching your architecture from the repository’s GitHub Releases page.
 
@@ -72,7 +83,7 @@ Cmd+Shift+P
 
 Select the downloaded file and restart Cursor.
 
-### Option B: install from source
+### Option C: install from source
 
 Clone the repository and run:
 
@@ -243,9 +254,13 @@ A successful installation:
 
 ## 7. Upgrade
 
+For Marketplace installations, enable **Auto Update** or use **Extensions: Check for Updates** after a newer version has been published.
+
+For GitHub release or source installations:
+
 1. Download or build the new VSIX.
 2. Install it with `--force` or **Extensions: Install from VSIX...**.
-3. Check Accessibility permission for the new installed helper path.
+3. Check Accessibility permission for the new installed helper path or rebuilt helper binary.
 4. Fully restart Cursor through the enhanced launcher.
 
 From a source checkout:
