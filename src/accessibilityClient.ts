@@ -11,7 +11,9 @@ import {
 import * as vscode from "vscode";
 
 import {
+  buildAccessibilityReplaceRequest,
   extractSafeHelperDiagnostics,
+  isValidTargetFingerprint,
   tryParsePayload,
 } from "./accessibilityProtocol";
 import { buildHelperEnvironment } from "./childEnvironment";
@@ -27,6 +29,8 @@ export interface AccessibilityReadResult {
   readonly text: string;
   readonly serializedText: string;
   readonly renderedText: string;
+  readonly targetFingerprint: string;
+  readonly selectionMode?: "focused" | "fallback";
   readonly applicationName?: string;
   readonly bundleIdentifier?: string;
   readonly clipboardRestored?: boolean;
@@ -38,6 +42,7 @@ export interface AccessibilityReplaceResult {
   readonly clipboardRestored: boolean;
   readonly applicationName?: string;
   readonly bundleIdentifier?: string;
+  readonly selectionMode?: "focused" | "fallback";
 }
 
 interface ProcessState {
@@ -91,19 +96,33 @@ export class AccessibilityClient {
       );
     }
 
+    if (
+      !isValidTargetFingerprint(
+        payload.targetFingerprint,
+      )
+    ) {
+      throw new AccessibilityClientError(
+        "invalid_read_response",
+        "The native helper returned no valid composer target fingerprint.",
+      );
+    }
+
     return payload;
   }
 
   public async replace(
     expectedOriginalText: string,
+    expectedTargetFingerprint: string,
     replacementText: string,
     cancellationToken: vscode.CancellationToken,
   ): Promise<AccessibilityReplaceResult> {
-    const request = JSON.stringify({
-      expectedOriginalText,
-      replacementText,
-      restoreClipboard: true,
-    });
+    const request = JSON.stringify(
+      buildAccessibilityReplaceRequest(
+        expectedOriginalText,
+        expectedTargetFingerprint,
+        replacementText,
+      ),
+    );
 
     const payload =
       await this.runHelper<AccessibilityReplaceResult>(

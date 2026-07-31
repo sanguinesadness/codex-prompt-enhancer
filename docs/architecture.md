@@ -27,7 +27,11 @@ The extension:
 
 ### 2. Canonical prompt read
 
-The Swift helper locates the frontmost Cursor process and confirms that the focused accessibility element is a writable `AXTextArea`.
+The Swift helper locates the frontmost Cursor process and validates that the explicitly focused accessibility element is a readable, enabled, selectable `AXTextArea`. Cursor does not consistently expose composer-specific semantic labels on the focused field, so direct focus is treated as the user’s targeting signal.
+
+Known editor, terminal, search, quick-input, output, debug, rename, and SCM contexts are rejected. If Cursor explicitly reports another focused control, the helper fails instead of searching for and focusing a different text area.
+
+Window traversal remains available only when `AXFocusedUIElement` cannot be resolved. Unlike direct focus, a fallback candidate must have strong Codex-specific semantic evidence, composer-like geometry, the minimum score, and an unambiguous score margin.
 
 To obtain Cursor’s canonical serialized representation, it uses:
 
@@ -39,6 +43,8 @@ Cmd+C
 This is important because the rendered accessibility value contains only visible reference labels, while the clipboard serialization contains the full Markdown-style reference targets.
 
 The helper restores the original clipboard after reading.
+
+The read response also contains a SHA-256 target fingerprint derived from prompt-free structural metadata such as the Cursor PID, window and element frames, accessibility role path, stable identifiers, and matched evidence names.
 
 ### 3. Inline reference protection
 
@@ -95,9 +101,11 @@ After the model returns:
 - unknown placeholders cause a hard failure;
 - the original composer remains untouched when validation fails.
 
-## 6. Stale-prompt protection
+## 6. Target and stale-prompt protection
 
 Before replacement, the helper re-reads the current canonical composer value.
+
+It first recomputes the composer target fingerprint. If the user switched chats, windows, or composer targets, the helper returns `composer_target_changed` before accessing the clipboard.
 
 Replacement proceeds only when it exactly matches the text read at the beginning of the operation.
 

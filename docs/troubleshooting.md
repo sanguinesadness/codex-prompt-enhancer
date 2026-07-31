@@ -39,6 +39,18 @@ Check all of the following:
 
 The status-bar item is informational and cannot start enhancement.
 
+## `The focused control is not the Codex prompt field`
+
+The helper resolved Cursor focus successfully but rejected the focused control as an editor, terminal, search field, quick input, output view, debug field, rename field, SCM field, or a non-selectable text area.
+
+Place the caret inside the intended Codex composer and press **Cmd+Shift+R** again. The extension does not start Codex or access the clipboard after this refusal.
+
+## `The Codex composer changed while enhancement was running`
+
+The validated composer fingerprint no longer matches the target read at the beginning of enhancement. This can happen after switching chats or windows, moving or resizing the Cursor window, or changing the active composer.
+
+Nothing was replaced and the clipboard was not accessed. Focus the intended composer and retry.
+
 ## Accessibility permission is missing
 
 Open:

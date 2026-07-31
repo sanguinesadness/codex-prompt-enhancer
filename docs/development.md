@@ -181,6 +181,8 @@ Avoid hardcoding user-specific paths outside default configuration handling.
 ### Concurrency and failure safety
 
 - Second shortcut press does not start a second run
+- Editor, terminal, search, quick input, output, debug, rename, and SCM focus is rejected before Codex starts
+- Switching chats, windows, or composer targets returns `composer_target_changed`
 - Timeout stops Codex
 - Editing during enhancement returns `stale_prompt`
 - Clipboard is restored after success
@@ -207,6 +209,12 @@ Before changing it:
 4. preserve replacement verification;
 5. refuse ambiguous accessibility targets;
 6. test with inline references and attachment chips.
+
+Composer eligibility, fallback selection, ambiguity handling, and target fingerprints are implemented in `native/ComposerValidation.swift`. Run the native regression harness directly with:
+
+```bash
+npm run test:native
+```
 
 Do not replace the paste flow with direct `AXValue` assignment. Direct assignment does not reconstruct clickable Cursor references.
 

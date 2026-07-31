@@ -4,7 +4,9 @@ import * as path from "node:path";
 import { describe, it } from "node:test";
 
 import {
+  buildAccessibilityReplaceRequest,
   extractSafeHelperDiagnostics,
+  isValidTargetFingerprint,
   tryParsePayload,
 } from "../src/accessibilityProtocol";
 
@@ -26,7 +28,56 @@ describe("accessibility helper protocol", () => {
 
     assert.equal(readPayload?.ok, true);
     assert.equal(typeof readPayload?.text, "string");
+    assert.equal(
+      isValidTargetFingerprint(
+        readPayload?.targetFingerprint,
+      ),
+      true,
+    );
     assert.equal(replacePayload?.replacementVerified, true);
+  });
+
+  it("validates target fingerprints", () => {
+    assert.equal(
+      isValidTargetFingerprint("a".repeat(64)),
+      true,
+    );
+    assert.equal(
+      isValidTargetFingerprint("A".repeat(64)),
+      false,
+    );
+    assert.equal(
+      isValidTargetFingerprint("a".repeat(63)),
+      false,
+    );
+    assert.equal(
+      isValidTargetFingerprint(undefined),
+      false,
+    );
+  });
+
+  it("builds replacement requests with target binding", () => {
+    const fingerprint = "c".repeat(64);
+    const request = buildAccessibilityReplaceRequest(
+      "Original synthetic prompt",
+      fingerprint,
+      "Enhanced synthetic prompt",
+    );
+
+    assert.deepEqual(request, {
+      expectedOriginalText: "Original synthetic prompt",
+      expectedTargetFingerprint: fingerprint,
+      replacementText: "Enhanced synthetic prompt",
+      restoreClipboard: true,
+    });
+    assert.throws(
+      () => buildAccessibilityReplaceRequest(
+        "Original",
+        "invalid",
+        "Enhanced",
+      ),
+      /Invalid composer target fingerprint/u,
+    );
   });
 
   it("rejects empty, malformed, and array output", () => {
@@ -60,5 +111,21 @@ describe("accessibility helper protocol", () => {
     assert.equal("diagnostics" in safeFields, false);
     assert.equal("nested" in safeFields, false);
     assert.equal("token" in safeFields, false);
+  });
+
+  it("keeps target mismatch diagnostics safe", () => {
+    const payload = tryParsePayload(
+      readFixture("accessibility-target-changed-error.json"),
+    );
+
+    assert.ok(payload);
+    const safeFields = extractSafeHelperDiagnostics(payload);
+
+    assert.deepEqual(safeFields, {
+      selectionMode: "fallback",
+      validationCode: "target_fingerprint_mismatch",
+    });
+    assert.equal("targetFingerprint" in safeFields, false);
+    assert.equal("replacementText" in safeFields, false);
   });
 });

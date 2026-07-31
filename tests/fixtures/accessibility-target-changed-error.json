@@ -1,0 +1,9 @@
+{
+  "ok": false,
+  "error": "composer_target_changed",
+  "message": "The validated composer changed.",
+  "selectionMode": "fallback",
+  "validationCode": "target_fingerprint_mismatch",
+  "targetFingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "replacementText": "Synthetic replacement"
+}

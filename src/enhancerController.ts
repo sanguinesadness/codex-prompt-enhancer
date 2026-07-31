@@ -167,6 +167,7 @@ export class EnhancerController
 
             await this.accessibilityClient.replace(
               originalPrompt,
+              readResult.targetFingerprint,
               restoredPrompt,
               cancellationToken,
             );
@@ -278,6 +279,12 @@ function getUserFacingError(
     AccessibilityClientError
   ) {
     switch (error.code) {
+    case "codex_composer_not_focused":
+      return [
+        "The focused control is not the Codex prompt field.",
+        "Place the caret inside the Codex composer and try again.",
+      ].join(" ");
+
     case "codex_composer_not_found":
       return [
         "Could not safely identify the Codex prompt field.",
@@ -297,6 +304,12 @@ function getUserFacingError(
       return [
         "The prompt changed while enhancement was running.",
         "Nothing was replaced.",
+      ].join(" ");
+
+    case "composer_target_changed":
+      return [
+        "The Codex composer changed while enhancement was running.",
+        "Nothing was replaced. Focus the intended composer and try again.",
       ].join(" ");
 
     case "native_helper_not_executable":
