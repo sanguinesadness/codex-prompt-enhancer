@@ -324,6 +324,13 @@ function getUserFacingError(
         "for the native helper response limit.",
       ].join(" ");
 
+    case "clipboard_snapshot_limit_exceeded":
+      return [
+        "The clipboard is too large to preserve safely.",
+        "Copy a smaller item or clear the clipboard, then try again.",
+        "Nothing was changed.",
+      ].join(" ");
+
     default:
       return error.message;
     }

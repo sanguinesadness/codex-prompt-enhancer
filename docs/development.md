@@ -81,7 +81,7 @@ This runs:
 - TypeScript type checking against the declared VS Code API baseline;
 - ESLint correctness rules;
 - synthetic TypeScript unit tests;
-- native Swift regression tests for composer validation and target fingerprints;
+- native Swift regression tests for composer validation, target fingerprints, clipboard limits, transaction cleanup, and termination requests;
 - repository privacy and artifact scanning.
 
 Run the same checks plus a production VSIX build and verification:
@@ -186,8 +186,11 @@ Avoid hardcoding user-specific paths outside default configuration handling.
 - Switching chats, windows, or composer targets returns `composer_target_changed`
 - Timeout stops Codex
 - Editing during enhancement returns `stale_prompt`
+- A snapshot over 128 MiB, 32 items, or 128 representations fails before clipboard mutation
 - Clipboard is restored after success
 - Clipboard is restored after failure
+- Helper cancellation and timeout allow five seconds for cooperative clipboard cleanup
+- Concurrent clipboard changes are preserved rather than overwritten
 - Failed verification leaves the original prompt intact
 
 ### Installation
@@ -206,12 +209,12 @@ Before changing it:
 
 1. preserve the canonical clipboard-based read path;
 2. preserve stale-prompt verification;
-3. preserve clipboard restoration;
+3. preserve bounded, centralized clipboard restoration;
 4. preserve replacement verification;
 5. refuse ambiguous accessibility targets;
 6. test with inline references and attachment chips.
 
-Composer eligibility, fallback selection, ambiguity handling, and target fingerprints are implemented in `native/ComposerValidation.swift`. Run the native regression harness directly with:
+Composer eligibility, fallback selection, ambiguity handling, and target fingerprints are implemented in `native/ComposerValidation.swift`. Clipboard budgets, transaction ownership, and termination-request state are implemented in `native/ClipboardSafety.swift`. Run the native regression harness directly with:
 
 ```bash
 npm run test:native

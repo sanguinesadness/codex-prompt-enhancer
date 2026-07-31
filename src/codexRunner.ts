@@ -27,6 +27,7 @@ import {
   MINIMUM_CODEX_VERSION,
   parseCodexVersionOutput,
 } from "./codexVersion";
+import { ProcessTerminationController } from "./processTermination";
 
 const TEMP_DIRECTORY_PREFIX =
   "codex-prompt-enhancer-";
@@ -36,6 +37,7 @@ const OUTPUT_FILENAME =
 
 const VERSION_CHECK_TIMEOUT_MS = 5_000;
 const MAX_VERSION_STDOUT_BYTES = 256;
+const CODEX_TERMINATION_GRACE_MS = 2_000;
 
 type SafeDiagnosticValue =
   string | number | boolean;
@@ -328,6 +330,11 @@ async function verifySupportedCodexVersion(
     timedOut: false,
     stdoutLimitExceeded: false,
   };
+  const termination =
+    new ProcessTerminationController(
+      child,
+      CODEX_TERMINATION_GRACE_MS,
+    );
 
   let stdout = "";
   let stdoutBytes = 0;
@@ -364,7 +371,7 @@ async function verifySupportedCodexVersion(
 
   const timeout = setTimeout(() => {
     state.timedOut = true;
-    terminateProcess(child);
+    termination.requestTermination();
   }, VERSION_CHECK_TIMEOUT_MS);
 
   try {
@@ -459,6 +466,7 @@ async function verifySupportedCodexVersion(
     return version;
   } finally {
     clearTimeout(timeout);
+    termination.dispose();
   }
 }
 
@@ -484,6 +492,11 @@ async function runCodexProcess(
     cancelled: false,
     timedOut: false,
   };
+  const termination =
+    new ProcessTerminationController(
+      child,
+      CODEX_TERMINATION_GRACE_MS,
+    );
 
   let stdoutBytes = 0;
   let stderrBytes = 0;
@@ -506,12 +519,12 @@ async function runCodexProcess(
     options.cancellationToken
       .onCancellationRequested(() => {
         state.cancelled = true;
-        terminateProcess(child);
+        termination.requestTermination();
       });
 
   const timeout = setTimeout(() => {
     state.timedOut = true;
-    terminateProcess(child);
+    termination.requestTermination();
   }, options.timeoutMilliseconds);
 
   try {
@@ -568,6 +581,7 @@ async function runCodexProcess(
   } finally {
     clearTimeout(timeout);
     cancellationSubscription.dispose();
+    termination.dispose();
   }
 }
 
@@ -645,29 +659,6 @@ function waitForCodexExit(
       );
     },
   );
-}
-
-function terminateProcess(
-  child: ChildProcessWithoutNullStreams,
-): void {
-  if (child.exitCode !== null) {
-    return;
-  }
-
-  child.kill("SIGTERM");
-
-  const forceKillTimeout =
-    setTimeout(() => {
-      if (child.exitCode === null) {
-        if (child.signalCode !== null) {
-          return;
-        }
-
-        child.kill("SIGKILL");
-      }
-    }, 2_000);
-
-  forceKillTimeout.unref();
 }
 
 function getSystemErrorCode(

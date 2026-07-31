@@ -9,6 +9,7 @@ PROJECT_DIR="$(
 
 MAIN_SOURCE="$PROJECT_DIR/native/PromptAccessibility.swift"
 VALIDATION_SOURCE="$PROJECT_DIR/native/ComposerValidation.swift"
+CLIPBOARD_SAFETY_SOURCE="$PROJECT_DIR/native/ClipboardSafety.swift"
 OUTPUT_DIR="$PROJECT_DIR/bin"
 TEMP_OUTPUT="$OUTPUT_DIR/prompt-accessibility-helper.new"
 FINAL_OUTPUT="$OUTPUT_DIR/prompt-accessibility-helper"
@@ -62,6 +63,7 @@ xcrun swiftc \
   -framework ApplicationServices \
   -framework CoreGraphics \
   "$VALIDATION_SOURCE" \
+  "$CLIPBOARD_SAFETY_SOURCE" \
   "$GENERATED_SOURCE" \
   -o "$TEMP_OUTPUT"
 

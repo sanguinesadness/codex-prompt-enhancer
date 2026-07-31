@@ -17,8 +17,10 @@ import {
   tryParsePayload,
 } from "./accessibilityProtocol";
 import { buildHelperEnvironment } from "./childEnvironment";
+import { ProcessTerminationController } from "./processTermination";
 
 const DEFAULT_HELPER_TIMEOUT_MS = 15_000;
+const HELPER_TERMINATION_GRACE_MS = 5_000;
 
 // The helper returns structured JSON containing the composer text.
 // This must not use the small rolling diagnostics buffer.
@@ -267,6 +269,11 @@ async function runProcess(
     timedOut: false,
     stdoutLimitExceeded: false,
   };
+  const termination =
+    new ProcessTerminationController(
+      child,
+      HELPER_TERMINATION_GRACE_MS,
+    );
 
   let stdout = "";
   let stdoutBytes = 0;
@@ -312,12 +319,12 @@ async function runProcess(
     options.cancellationToken
       .onCancellationRequested(() => {
         state.cancelled = true;
-        terminateProcess(child);
+        termination.requestTermination();
       });
 
   const timeout = setTimeout(() => {
     state.timedOut = true;
-    terminateProcess(child);
+    termination.requestTermination();
   }, options.timeoutMilliseconds);
 
   try {
@@ -374,6 +381,7 @@ async function runProcess(
   } finally {
     clearTimeout(timeout);
     cancellationSubscription.dispose();
+    termination.dispose();
   }
 }
 
@@ -431,29 +439,6 @@ function getSystemErrorCode(
   return typeof code === "string"
     ? code
     : "unknown";
-}
-
-function terminateProcess(
-  child: ChildProcessWithoutNullStreams,
-): void {
-  if (child.exitCode !== null) {
-    return;
-  }
-
-  child.kill("SIGTERM");
-
-  const forceKillTimeout =
-    setTimeout(() => {
-      if (child.exitCode === null) {
-        if (child.signalCode !== null) {
-          return;
-        }
-
-        child.kill("SIGKILL");
-      }
-    }, 2_000);
-
-  forceKillTimeout.unref();
 }
 
 async function verifyExecutable(
