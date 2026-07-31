@@ -21,7 +21,7 @@ Codex Prompt Enhancer removes that intermediate step. It reads the text already 
 - Leaves screenshot, file, and folder attachment chips attached
 - Never sends the enhanced prompt automatically
 - Restores the clipboard after replacement
-- Refuses to overwrite the composer if the prompt changed during enhancement
+- Refuses to overwrite the composer if its validated target or prompt text changed during enhancement
 - Runs Codex in a temporary directory with a read-only sandbox
 - Uses ephemeral Codex sessions
 - Keeps prompt contents and reference paths out of extension logs
@@ -95,7 +95,8 @@ During enhancement:
 - the sandbox is read-only;
 - the Codex session is ephemeral;
 - logs contain operational metadata, not prompt contents;
-- replacement is aborted when the composer changed while the model was running.
+- accessibility fallback requires strong Codex-specific semantic and geometry evidence;
+- replacement is aborted when the validated composer target or prompt text changed while the model was running.
 
 See [Architecture and security model](docs/architecture.md) for the full flow.
 
@@ -132,6 +133,7 @@ A dedicated launcher is strongly recommended because tested Cursor versions do n
 The complete installation procedure covers:
 
 - Codex CLI and skill prerequisites
+- Cursor Marketplace installation and updates
 - prebuilt VSIX installation
 - source builds
 - the required Cursor launcher
@@ -174,7 +176,8 @@ in an empty temporary directory
 References are restored and validated
         │
         ▼
-Native helper checks that the original prompt is still current
+Native helper checks the same composer target fingerprint
+and verifies that the original prompt is still current
         │
         ▼
 Enhanced text is pasted back with Cmd+V

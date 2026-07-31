@@ -80,7 +80,8 @@ This runs:
 
 - TypeScript type checking against the declared VS Code API baseline;
 - ESLint correctness rules;
-- synthetic unit tests;
+- synthetic TypeScript unit tests;
+- native Swift regression tests for composer validation and target fingerprints;
 - repository privacy and artifact scanning.
 
 Run the same checks plus a production VSIX build and verification:
@@ -181,7 +182,7 @@ Avoid hardcoding user-specific paths outside default configuration handling.
 ### Concurrency and failure safety
 
 - Second shortcut press does not start a second run
-- Editor, terminal, search, quick input, output, debug, rename, and SCM focus is rejected before Codex starts
+- Editor, terminal, search, quick input, output, debug, rename, and SCM focus is rejected before Codex starts when Cursor exposes identifying Accessibility context
 - Switching chats, windows, or composer targets returns `composer_target_changed`
 - Timeout stops Codex
 - Editing during enhancement returns `stale_prompt`

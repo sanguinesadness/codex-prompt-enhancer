@@ -43,7 +43,7 @@ The project reduces risk by:
 - hiding inline reference paths from the model;
 - not inspecting attachment contents;
 - not sending prompts automatically;
-- refusing focused editor, terminal, search, quick-input, output, debug, rename, and SCM text fields;
+- refusing focused editor, terminal, search, quick-input, output, debug, rename, and SCM text fields when Cursor exposes identifying Accessibility context;
 - requiring strong Codex-specific semantic and geometry evidence before using accessibility fallback discovery;
 - binding replacement to a prompt-free fingerprint of the composer originally read;
 - refusing stale or unverifiable replacements;
