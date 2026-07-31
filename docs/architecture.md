@@ -27,11 +27,11 @@ The extension:
 
 ### 2. Canonical prompt read
 
-The Swift helper locates the frontmost Cursor process and validates that the focused accessibility element is a readable, enabled, selectable Codex `AXTextArea`.
+The Swift helper locates the frontmost Cursor process and validates that the explicitly focused accessibility element is a readable, enabled, selectable `AXTextArea`. Cursor does not consistently expose composer-specific semantic labels on the focused field, so direct focus is treated as the user’s targeting signal.
 
 Known editor, terminal, search, quick-input, output, debug, rename, and SCM contexts are rejected. If Cursor explicitly reports another focused control, the helper fails instead of searching for and focusing a different text area.
 
-Window traversal remains available only when `AXFocusedUIElement` cannot be resolved. A fallback candidate must have strong Codex-specific semantic evidence, composer-like geometry, the minimum score, and an unambiguous score margin.
+Window traversal remains available only when `AXFocusedUIElement` cannot be resolved. Unlike direct focus, a fallback candidate must have strong Codex-specific semantic evidence, composer-like geometry, the minimum score, and an unambiguous score margin.
 
 To obtain Cursor’s canonical serialized representation, it uses:
 

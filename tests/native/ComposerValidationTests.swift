@@ -107,16 +107,16 @@ test("accepts a directly focused composer") {
     expect(result.code == "eligible", "focused result should be eligible")
 }
 
-test("rejects direct focus without composer evidence") {
+test("accepts direct focus without semantic evidence") {
     let result = validateComposer(
-        input(context: "plain text field"),
+        input(context: ""),
         mode: .focused
     )
 
-    expect(!result.isEligible, "generic text field must be rejected")
+    expect(result.isEligible, "focused selectable text area should pass")
     expect(
-        result.code == "composer_evidence_missing",
-        "generic field should report missing evidence"
+        result.code == "eligible",
+        "focused structural validation should be sufficient"
     )
 }
 

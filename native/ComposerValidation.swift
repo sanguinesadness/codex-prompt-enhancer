@@ -173,14 +173,6 @@ func validateComposer(
             )
         }
 
-        guard !matchedSignals.isEmpty else {
-            return ComposerValidationResult(
-                isEligible: false,
-                code: "composer_evidence_missing",
-                matchedSignals: matchedSignals
-            )
-        }
-
     case .fallback:
         guard !productSignals.isEmpty else {
             return ComposerValidationResult(

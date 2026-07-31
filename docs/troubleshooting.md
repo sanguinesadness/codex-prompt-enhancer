@@ -41,7 +41,7 @@ The status-bar item is informational and cannot start enhancement.
 
 ## `The focused control is not the Codex prompt field`
 
-The helper resolved Cursor focus successfully but rejected the focused control as an editor, terminal, search field, quick input, output view, debug field, rename field, SCM field, or another text area without composer evidence.
+The helper resolved Cursor focus successfully but rejected the focused control as an editor, terminal, search field, quick input, output view, debug field, rename field, SCM field, or a non-selectable text area.
 
 Place the caret inside the intended Codex composer and press **Cmd+Shift+R** again. The extension does not start Codex or access the clipboard after this refusal.
 
