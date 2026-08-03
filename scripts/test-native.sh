@@ -37,6 +37,7 @@ xcrun swiftc \
   -target "$SWIFT_TARGET" \
   -module-cache-path "$MODULE_CACHE" \
   "$PROJECT_DIR/native/ComposerValidation.swift" \
+  "$PROJECT_DIR/native/ClipboardSafety.swift" \
   "$TEST_MAIN" \
   -o "$TEST_BINARY"
 

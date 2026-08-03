@@ -101,16 +101,46 @@ describe("accessibility helper protocol", () => {
         replacementText: "Synthetic replacement",
       },
       token: "synthetic-token",
+      clipboardSnapshotBytes: 1024,
+      clipboardSnapshotItems: 2,
+      clipboardSnapshotRepresentations: 3,
+      clipboardSnapshotMaximumBytes: 134217728,
+      clipboardSnapshotMaximumItems: 32,
+      clipboardSnapshotMaximumRepresentations: 128,
+      clipboardTypes: [
+        "public.synthetic-secret",
+      ],
+      clipboardContents: "Synthetic private text",
     });
 
     assert.equal(safeFields.expectedLength, 25);
     assert.equal(safeFields.copiedLength, 26);
     assert.equal(safeFields.clipboardRestored, true);
+    assert.equal(safeFields.clipboardSnapshotBytes, 1024);
+    assert.equal(safeFields.clipboardSnapshotItems, 2);
+    assert.equal(
+      safeFields.clipboardSnapshotRepresentations,
+      3,
+    );
+    assert.equal(
+      safeFields.clipboardSnapshotMaximumBytes,
+      134217728,
+    );
+    assert.equal(
+      safeFields.clipboardSnapshotMaximumItems,
+      32,
+    );
+    assert.equal(
+      safeFields.clipboardSnapshotMaximumRepresentations,
+      128,
+    );
     assert.equal("expectedOriginalText" in safeFields, false);
     assert.equal("replacementText" in safeFields, false);
     assert.equal("diagnostics" in safeFields, false);
     assert.equal("nested" in safeFields, false);
     assert.equal("token" in safeFields, false);
+    assert.equal("clipboardTypes" in safeFields, false);
+    assert.equal("clipboardContents" in safeFields, false);
   });
 
   it("keeps target mismatch diagnostics safe", () => {

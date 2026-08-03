@@ -194,7 +194,7 @@ If they disappear:
 
 ## Clipboard was not restored
 
-The helper is designed to restore the clipboard after read and replacement.
+The helper restores accepted clipboard snapshots after success, handled failure, timeout, and cooperative termination when it still owns the temporary pasteboard state.
 
 When reproducing:
 
@@ -202,6 +202,14 @@ When reproducing:
 - check whether another clipboard manager modified the clipboard concurrently;
 - inspect helper diagnostics;
 - avoid changing clipboard contents during the enhancement run.
+
+If another application changes the clipboard during enhancement, that newer content intentionally wins and the helper reports that restoration was skipped. Restoration cannot be guaranteed after `SIGKILL`, a helper crash, power loss, or an unresponsive pasteboard.
+
+## `Clipboard contents are too large to preserve safely`
+
+The clipboard exceeds one of the fixed snapshot limits: 128 MiB total data, 32 items, or 128 representations. The helper fails before clearing or modifying the pasteboard.
+
+Copy a smaller item or clear the clipboard, then press **Cmd+Shift+R** again. Diagnostics report only counts and configured limits, not clipboard contents or type names.
 
 ## Progress remains forever
 
@@ -218,7 +226,7 @@ Starting Codex enhancement
 Native helper command started. command=replace
 ```
 
-A stuck Codex process should be terminated when `codexPromptEnhancer.timeoutSeconds` is reached.
+A stuck Codex process receives `SIGTERM` and has two seconds to exit before `SIGKILL`. A timed-out native helper receives `SIGTERM` and has five seconds to restore helper-owned temporary clipboard state before escalation.
 
 ## Installed extension is not updated
 

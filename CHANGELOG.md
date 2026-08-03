@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Limits clipboard snapshots to 128 MiB, 32 items, and 128 representations before mutation and centralizes restoration across success and handled failures.
+- Restores helper-owned temporary clipboard state during cooperative `SIGTERM` and `SIGINT`, with a five-second helper grace period and a two-second Codex grace period.
+- Prevents duplicate termination escalation timers and preserves concurrent user clipboard changes.
+- Adds safe clipboard-count diagnostics plus native and TypeScript lifecycle regression coverage.
 - Validates focused and fallback composer targets, rejects identifiable non-composer contexts, and binds replacement to the exact composer fingerprint read at the start of enhancement.
 - Accepts Cursor’s directly focused composer when its accessibility tree omits composer-specific semantic labels.
 - Adds native Swift regression tests for composer evidence, fallback geometry, ambiguity handling, and target fingerprinting.

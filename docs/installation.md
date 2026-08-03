@@ -229,6 +229,8 @@ When permission is missing:
 4. Enable Cursor too if macOS lists it separately.
 5. Fully quit and reopen Cursor through **Cursor Enhanced**.
 
+The helper temporarily uses the macOS clipboard to preserve Cursor’s serialized inline references. It accepts snapshots up to 128 MiB, 32 items, and 128 representations; larger clipboards fail before any clipboard change. Handled cancellation and timeout requests attempt restoration, but `SIGKILL`, crashes, power loss, and an unresponsive pasteboard cannot guarantee it.
+
 ## 6. Verify the installation
 
 Launch Cursor through **Cursor Enhanced**.

@@ -20,7 +20,7 @@ Codex Prompt Enhancer removes that intermediate step. It reads the text already 
 - Preserves clickable inline file and folder references
 - Leaves screenshot, file, and folder attachment chips attached
 - Never sends the enhanced prompt automatically
-- Restores the clipboard after replacement
+- Restores clipboard snapshots up to 128 MiB after replacement and handled failures
 - Refuses to overwrite the composer if its validated target or prompt text changed during enhancement
 - Runs Codex in a temporary directory with a read-only sandbox
 - Uses ephemeral Codex sessions
@@ -96,6 +96,8 @@ During enhancement:
 - the Codex session is ephemeral;
 - logs contain operational metadata, not prompt contents;
 - accessibility fallback requires strong Codex-specific semantic and geometry evidence;
+- clipboard snapshots are limited to 128 MiB, 32 items, and 128 representations and fail before mutation when oversized;
+- handled helper cancellation and timeout requests restore helper-owned temporary clipboard state before exit;
 - replacement is aborted when the validated composer target or prompt text changed while the model was running.
 
 See [Architecture and security model](docs/architecture.md) for the full flow.
@@ -194,6 +196,7 @@ Clipboard is restored; prompt remains unsent
 - Cursor must be launched with renderer accessibility enabled
 - The status-bar item is informational rather than interactive
 - Attachment contents are intentionally not analyzed
+- Clipboard restoration cannot be guaranteed after `SIGKILL`, a process crash, power loss, or an unresponsive macOS pasteboard
 - Accessibility behavior may change when Cursor updates its Electron or Codex UI implementation
 
 ## Documentation

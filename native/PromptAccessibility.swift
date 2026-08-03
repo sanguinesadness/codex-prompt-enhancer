@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 import ApplicationServices
 import CoreGraphics
+import Darwin
 
 // MARK: - Constants
 
@@ -47,9 +48,28 @@ private struct PasteboardItemSnapshot {
     let representations: [PasteboardRepresentation]
 }
 
-private struct ClipboardRestoreResult {
-    let restored: Bool
-    let skippedBecauseChanged: Bool
+private struct ClipboardCaptureResult {
+    let snapshots: [PasteboardItemSnapshot]
+    let statistics: ClipboardSnapshotStatistics
+}
+
+private struct HelperCommandError: Error {
+    let code: String
+    let message: String
+    let status: Int32
+    let details: [String: Any]
+
+    init(
+        code: String,
+        message: String,
+        status: Int32 = 1,
+        details: [String: Any] = [:]
+    ) {
+        self.code = code
+        self.message = message
+        self.status = status
+        self.details = details
+    }
 }
 
 // MARK: - JSON output
@@ -89,6 +109,121 @@ private func fail(
 
     writeJSON(payload)
     exit(status)
+}
+
+private func fail(
+    _ error: HelperCommandError,
+    additionalDetails: [String: Any] = [:]
+) -> Never {
+    var details = error.details
+
+    for (key, value) in additionalDetails {
+        details[key] = value
+    }
+
+    fail(
+        code: error.code,
+        message: error.message,
+        status: error.status,
+        details: details
+    )
+}
+
+// MARK: - Cooperative termination
+
+private final class CooperativeSignalMonitor {
+    private let terminationSource: DispatchSourceSignal
+    private let interruptSource: DispatchSourceSignal
+
+    init(state: TerminationRequestState) {
+        Darwin.signal(SIGTERM, SIG_IGN)
+        Darwin.signal(SIGINT, SIG_IGN)
+
+        terminationSource = DispatchSource.makeSignalSource(
+            signal: SIGTERM,
+            queue: DispatchQueue.global(
+                qos: .userInitiated
+            )
+        )
+        interruptSource = DispatchSource.makeSignalSource(
+            signal: SIGINT,
+            queue: DispatchQueue.global(
+                qos: .userInitiated
+            )
+        )
+
+        terminationSource.setEventHandler {
+            state.request(signal: SIGTERM)
+        }
+        interruptSource.setEventHandler {
+            state.request(signal: SIGINT)
+        }
+
+        terminationSource.resume()
+        interruptSource.resume()
+    }
+}
+
+private let terminationRequestState =
+    TerminationRequestState()
+private let cooperativeSignalMonitor =
+    CooperativeSignalMonitor(
+        state: terminationRequestState
+    )
+
+private func terminationSignalName(
+    _ signal: Int32
+) -> String {
+    switch signal {
+    case SIGTERM:
+        return "SIGTERM"
+    case SIGINT:
+        return "SIGINT"
+    default:
+        return "UNKNOWN"
+    }
+}
+
+private func terminationCheckpoint() throws {
+    guard
+        let signal =
+            terminationRequestState.currentSignal()
+    else {
+        return
+    }
+
+    throw HelperCommandError(
+        code: "native_helper_terminated",
+        message: """
+        The native helper received a termination request and stopped safely.
+        """,
+        status: 128 + signal,
+        details: [
+            "signal": terminationSignalName(signal)
+        ]
+    )
+}
+
+private func interruptibleSleep(
+    forTimeInterval interval: TimeInterval
+) throws {
+    let deadline = Date().addingTimeInterval(interval)
+
+    while Date() < deadline {
+        try terminationCheckpoint()
+
+        Thread.sleep(
+            forTimeInterval: min(
+                0.025,
+                max(
+                    0,
+                    deadline.timeIntervalSinceNow
+                )
+            )
+        )
+    }
+
+    try terminationCheckpoint()
 }
 
 // MARK: - General utilities
@@ -1287,7 +1422,9 @@ private func findFocusedTextArea(
 
 private func focusTextArea(
     _ textArea: AXUIElement
-) {
+) throws {
+    try terminationCheckpoint()
+
     if boolAttribute(
         textArea,
         kAXFocusedAttribute as CFString
@@ -1296,7 +1433,7 @@ private func focusTextArea(
             textArea,
             kAXFocusedAttribute as CFString
         ) else {
-            fail(
+            throw HelperCommandError(
                 code: "composer_focus_not_settable",
                 message: """
                 The Codex composer is not focused and its AXFocused attribute \
@@ -1312,7 +1449,7 @@ private func focusTextArea(
         )
 
         guard error == .success else {
-            fail(
+            throw HelperCommandError(
                 code: "composer_focus_failed",
                 message: "Could not focus the Codex composer.",
                 details: [
@@ -1323,13 +1460,13 @@ private func focusTextArea(
     }
 
     // Allow Chromium to synchronize the accessibility focus with its DOM.
-    Thread.sleep(forTimeInterval: 0.1)
+    try interruptibleSleep(forTimeInterval: 0.1)
 
     guard boolAttribute(
         textArea,
         kAXFocusedAttribute as CFString
     ) == true else {
-        fail(
+        throw HelperCommandError(
             code: "composer_focus_verification_failed",
             message: "The Codex composer did not retain focus."
         )
@@ -1340,56 +1477,68 @@ private func focusTextArea(
 
 private func captureClipboard(
     _ pasteboard: NSPasteboard
-) -> [PasteboardItemSnapshot] {
+) throws -> ClipboardCaptureResult {
     guard let items = pasteboard.pasteboardItems else {
-        return []
+        return ClipboardCaptureResult(
+            snapshots: [],
+            statistics:
+                ClipboardSnapshotStatistics(
+                    bytes: 0,
+                    items: 0,
+                    representations: 0
+                )
+        )
     }
 
-    return items.compactMap { item in
-        let representations = item.types.compactMap { type
-            -> PasteboardRepresentation? in
+    var budget = ClipboardSnapshotBudget()
+    var snapshots: [PasteboardItemSnapshot] = []
+
+    for item in items {
+        try budget.addItem()
+        var representations: [PasteboardRepresentation] = []
+
+        for type in item.types {
+            try terminationCheckpoint()
 
             guard let data = item.data(forType: type) else {
-                return nil
+                continue
             }
 
-            return PasteboardRepresentation(
-                type: type,
-                data: data
+            try budget.addRepresentation(
+                byteCount: data.count
+            )
+
+            representations.append(
+                PasteboardRepresentation(
+                    type: type,
+                    data: data
+                )
             )
         }
 
-        guard !representations.isEmpty else {
-            return nil
+        if !representations.isEmpty {
+            snapshots.append(
+                PasteboardItemSnapshot(
+                    representations: representations
+                )
+            )
         }
-
-        return PasteboardItemSnapshot(
-            representations: representations
-        )
     }
+
+    return ClipboardCaptureResult(
+        snapshots: snapshots,
+        statistics: budget.statistics
+    )
 }
 
-private func restoreClipboard(
+private func restoreClipboardContents(
     _ snapshots: [PasteboardItemSnapshot],
-    pasteboard: NSPasteboard,
-    expectedTemporaryChangeCount: Int
-) -> ClipboardRestoreResult {
-    // Avoid overwriting a clipboard change made by the user or another app
-    // while enhancement was running.
-    guard pasteboard.changeCount == expectedTemporaryChangeCount else {
-        return ClipboardRestoreResult(
-            restored: false,
-            skippedBecauseChanged: true
-        )
-    }
-
+    pasteboard: NSPasteboard
+) -> Bool {
     pasteboard.clearContents()
 
     guard !snapshots.isEmpty else {
-        return ClipboardRestoreResult(
-            restored: true,
-            skippedBecauseChanged: false
-        )
+        return true
     }
 
     let restoredItems = snapshots.compactMap {
@@ -1411,17 +1560,136 @@ private func restoreClipboard(
     }
 
     guard !restoredItems.isEmpty else {
-        return ClipboardRestoreResult(
-            restored: false,
-            skippedBecauseChanged: false
+        return false
+    }
+
+    return pasteboard.writeObjects(restoredItems)
+}
+
+private final class ClipboardTransaction {
+    let statistics: ClipboardSnapshotStatistics
+
+    private let pasteboard: NSPasteboard
+    private let snapshots: [PasteboardItemSnapshot]
+    private let coordinator =
+        ClipboardTransactionCoordinator()
+
+    init(pasteboard: NSPasteboard) throws {
+        self.pasteboard = pasteboard
+
+        do {
+            let capture = try captureClipboard(
+                pasteboard
+            )
+            snapshots = capture.snapshots
+            statistics = capture.statistics
+        } catch let error as ClipboardSnapshotLimitError {
+            throw HelperCommandError(
+                code: "clipboard_snapshot_limit_exceeded",
+                message: """
+                Clipboard contents are too large to preserve safely. Nothing \
+                was changed.
+                """,
+                details: clipboardSnapshotDiagnostics(
+                    error.statistics
+                )
+            )
+        }
+    }
+
+    func recordTemporaryChange() {
+        coordinator.recordTemporaryChange(
+            changeCount: pasteboard.changeCount
         )
     }
 
-    let success = pasteboard.writeObjects(restoredItems)
+    func requireTemporaryOwnership() throws {
+        guard coordinator.ownsTemporaryState(
+            currentChangeCount:
+                pasteboard.changeCount
+        ) else {
+            throw HelperCommandError(
+                code: "clipboard_changed_during_operation",
+                message: """
+                The clipboard changed while the native helper was using it. \
+                The operation stopped without overwriting the newer \
+                clipboard contents.
+                """
+            )
+        }
+    }
 
-    return ClipboardRestoreResult(
-        restored: success,
-        skippedBecauseChanged: false
+    func finish(
+        shouldRestore: Bool = true
+    ) -> ClipboardRestoreResult {
+        coordinator.finish(
+            currentChangeCount:
+                pasteboard.changeCount,
+            shouldRestore: shouldRestore
+        ) {
+            restoreClipboardContents(
+                snapshots,
+                pasteboard: pasteboard
+            )
+        }
+    }
+
+    var diagnostics: [String: Any] {
+        clipboardSnapshotDiagnostics(
+            statistics
+        )
+    }
+}
+
+private func clipboardSnapshotDiagnostics(
+    _ statistics: ClipboardSnapshotStatistics
+) -> [String: Any] {
+    [
+        "clipboardSnapshotBytes":
+            statistics.bytes,
+        "clipboardSnapshotItems":
+            statistics.items,
+        "clipboardSnapshotRepresentations":
+            statistics.representations,
+        "clipboardSnapshotMaximumBytes":
+            clipboardSnapshotMaximumBytes,
+        "clipboardSnapshotMaximumItems":
+            clipboardSnapshotMaximumItems,
+        "clipboardSnapshotMaximumRepresentations":
+            clipboardSnapshotMaximumRepresentations
+    ]
+}
+
+private func finishClipboardTransaction(
+    _ transaction: ClipboardTransaction,
+    shouldRestore: Bool = true
+) -> (
+    result: ClipboardRestoreResult,
+    details: [String: Any]
+) {
+    let result = transaction.finish(
+        shouldRestore: shouldRestore
+    )
+    var details = transaction.diagnostics
+    details["clipboardRestored"] =
+        result.restored
+    details[
+        "clipboardRestoreSkippedBecauseChanged"
+    ] = result.skippedBecauseChanged
+    return (result, details)
+}
+
+private func fail(
+    _ error: HelperCommandError,
+    afterFinishing transaction:
+        ClipboardTransaction
+) -> Never {
+    let cleanup = finishClipboardTransaction(
+        transaction
+    )
+    fail(
+        error,
+        additionalDetails: cleanup.details
     )
 }
 
@@ -1430,7 +1698,9 @@ private func restoreClipboard(
 private func postKey(
     _ keyCode: CGKeyCode,
     flags: CGEventFlags
-) {
+) throws {
+    try terminationCheckpoint()
+
     let source = CGEventSource(
         stateID: .hidSystemState
     )
@@ -1447,7 +1717,7 @@ private func postKey(
             keyDown: false
         )
     else {
-        fail(
+        throw HelperCommandError(
             code: "keyboard_event_creation_failed",
             message: "Could not create a synthetic keyboard event."
         )
@@ -1459,87 +1729,109 @@ private func postKey(
     keyDown.post(tap: .cghidEventTap)
     Thread.sleep(forTimeInterval: 0.025)
     keyUp.post(tap: .cghidEventTap)
+    try terminationCheckpoint()
 }
 
 private func postCommandKey(
     _ keyCode: CGKeyCode
-) {
-    postKey(
+) throws {
+    try postKey(
         keyCode,
         flags: .maskCommand
     )
 }
 
-private func postCommandA() {
-    postCommandKey(selectAllKeyCode)
+private func postCommandA() throws {
+    try postCommandKey(selectAllKeyCode)
 }
 
-private func postCommandC() {
-    postCommandKey(copyKeyCode)
+private func postCommandC() throws {
+    try postCommandKey(copyKeyCode)
 }
 
-private func postCommandV() {
-    postCommandKey(pasteKeyCode)
+private func postCommandV() throws {
+    try postCommandKey(pasteKeyCode)
 }
 
-private func collapseSelectionToEnd() {
-    postKey(
+private func collapseSelectionToEnd() throws {
+    try postKey(
         rightArrowKeyCode,
         flags: CGEventFlags(rawValue: 0)
     )
 
-    Thread.sleep(forTimeInterval: 0.05)
+    try interruptibleSleep(
+        forTimeInterval: 0.05
+    )
 }
 
 private func waitForClipboardCopy(
     pasteboard: NSPasteboard,
     previousChangeCount: Int,
+    transaction: ClipboardTransaction,
     timeout: TimeInterval = 1.5
-) -> String? {
+) throws -> String? {
     let deadline = Date().addingTimeInterval(timeout)
 
     while Date() < deadline {
+        try terminationCheckpoint()
+
         if
             pasteboard.changeCount != previousChangeCount,
             let value = pasteboard.string(forType: .string)
         {
+            transaction.recordTemporaryChange()
             return value
         }
 
-        Thread.sleep(forTimeInterval: 0.025)
+        try interruptibleSleep(
+            forTimeInterval: 0.025
+        )
     }
 
+    try terminationCheckpoint()
     return nil
 }
 
 private func copyEntirePromptSerialized(
     from textArea: AXUIElement,
-    pasteboard: NSPasteboard
-) -> String? {
-    focusTextArea(textArea)
+    pasteboard: NSPasteboard,
+    transaction: ClipboardTransaction
+) throws -> String? {
+    try terminationCheckpoint()
+    try focusTextArea(textArea)
 
-    postCommandA()
-    Thread.sleep(forTimeInterval: 0.12)
+    try postCommandA()
+    try interruptibleSleep(
+        forTimeInterval: 0.12
+    )
 
+    try terminationCheckpoint()
+    try transaction.requireTemporaryOwnership()
     pasteboard.clearContents()
+    transaction.recordTemporaryChange()
+    try terminationCheckpoint()
 
     let sentinel =
         "__CODEX_PROMPT_COPY_SENTINEL_\(UUID().uuidString)__"
 
+    try transaction.requireTemporaryOwnership()
     guard pasteboard.setString(
         sentinel,
         forType: .string
     ) else {
         return nil
     }
+    transaction.recordTemporaryChange()
+    try terminationCheckpoint()
 
     let sentinelChangeCount = pasteboard.changeCount
 
-    postCommandC()
+    try postCommandC()
 
-    return waitForClipboardCopy(
+    return try waitForClipboardCopy(
         pasteboard: pasteboard,
-        previousChangeCount: sentinelChangeCount
+        previousChangeCount: sentinelChangeCount,
+        transaction: transaction
     )
 }
 
@@ -1548,12 +1840,14 @@ private func copyEntirePromptSerialized(
 private func waitForReplacement(
     in textArea: AXUIElement,
     expectedText: String
-) -> Bool {
+) throws -> Bool {
     let deadline = Date().addingTimeInterval(
         pasteVerificationTimeout
     )
 
     while Date() < deadline {
+        try terminationCheckpoint()
+
         if stringAttribute(
             textArea,
             kAXValueAttribute as CFString
@@ -1561,7 +1855,9 @@ private func waitForReplacement(
             return true
         }
 
-        Thread.sleep(forTimeInterval: 0.05)
+        try interruptibleSleep(
+            forTimeInterval: 0.05
+        )
     }
 
     return false
@@ -1623,76 +1919,93 @@ private func readCommand(delay: TimeInterval) {
 
     let focused = findFocusedTextArea(delay: delay)
     let pasteboard = NSPasteboard.general
-    let clipboardSnapshots = captureClipboard(pasteboard)
+    let transaction: ClipboardTransaction
 
-    guard let serializedText = copyEntirePromptSerialized(
-        from: focused.element,
-        pasteboard: pasteboard
-    ) else {
-        let restoreResult = restoreClipboard(
-            clipboardSnapshots,
-            pasteboard: pasteboard,
-            expectedTemporaryChangeCount: pasteboard.changeCount
+    do {
+        transaction = try ClipboardTransaction(
+            pasteboard: pasteboard
         )
-
+    } catch let error as HelperCommandError {
+        fail(error)
+    } catch {
         fail(
-            code: "prompt_copy_failed",
-            message: """
-            Could not copy the complete serialized Codex prompt. Ensure the \
-            caret is inside the Codex composer.
-            """,
-            details: [
-                "clipboardRestored": restoreResult.restored
-            ]
+            code: "clipboard_snapshot_failed",
+            message: "Could not preserve the clipboard safely."
         )
     }
 
-    let serializedClipboardChangeCount = pasteboard.changeCount
+    do {
+        guard let serializedText =
+            try copyEntirePromptSerialized(
+                from: focused.element,
+                pasteboard: pasteboard,
+                transaction: transaction
+            )
+        else {
+            throw HelperCommandError(
+                code: "prompt_copy_failed",
+                message: """
+                Could not copy the complete serialized Codex prompt. Ensure \
+                the caret is inside the Codex composer.
+                """
+            )
+        }
 
-    // Cmd+C leaves the complete prompt selected. Collapse the selection so
-    // the composer remains safe and editable after this command.
-    collapseSelectionToEnd()
+        // Cmd+C leaves the complete prompt selected. Collapse the selection
+        // so the composer remains safe and editable after this command.
+        try collapseSelectionToEnd()
 
-    let clipboardResult = restoreClipboard(
-        clipboardSnapshots,
-        pasteboard: pasteboard,
-        expectedTemporaryChangeCount:
-            serializedClipboardChangeCount
-    )
+        let cleanup = finishClipboardTransaction(
+            transaction
+        )
 
-    var response: [String: Any] = [
-        "ok": true,
+        var response: [String: Any] = [
+            "ok": true,
 
-        // `text` remains the primary field consumed by the TypeScript
-        // extension. It now contains the canonical serialized form.
-        "text": serializedText,
-        "serializedText": serializedText,
-        "renderedText": focused.text,
-        "targetFingerprint": focused.targetFingerprint,
-        "selectionMode": focused.selectionMode.rawValue,
+            // `text` remains the primary field consumed by the TypeScript
+            // extension. It now contains the canonical serialized form.
+            "text": serializedText,
+            "serializedText": serializedText,
+            "renderedText": focused.text,
+            "targetFingerprint": focused.targetFingerprint,
+            "selectionMode": focused.selectionMode.rawValue,
 
-        "textLength": serializedText.count,
-        "serializedTextLength": serializedText.count,
-        "renderedTextLength": focused.text.count,
+            "textLength": serializedText.count,
+            "serializedTextLength": serializedText.count,
+            "renderedTextLength": focused.text.count,
 
-        "serializedUtf16Length": utf16Length(serializedText),
-        "renderedUtf16Length": utf16Length(focused.text),
+            "serializedUtf16Length": utf16Length(serializedText),
+            "renderedUtf16Length": utf16Length(focused.text),
 
-        "role": stringAttribute(
-            focused.element,
-            kAXRoleAttribute as CFString
-        ) ?? NSNull(),
+            "role": stringAttribute(
+                focused.element,
+                kAXRoleAttribute as CFString
+            ) ?? NSNull()
+        ]
 
-        "clipboardRestored": clipboardResult.restored,
-        "clipboardRestoreSkippedBecauseChanged":
-            clipboardResult.skippedBecauseChanged
-    ]
+        for (key, value) in cleanup.details {
+            response[key] = value
+        }
 
-    for (key, value) in applicationMetadata(focused.application) {
-        response[key] = value
+        for (key, value) in applicationMetadata(focused.application) {
+            response[key] = value
+        }
+
+        writeJSON(response)
+    } catch let error as HelperCommandError {
+        fail(
+            error,
+            afterFinishing: transaction
+        )
+    } catch {
+        fail(
+            HelperCommandError(
+                code: "native_helper_failed",
+                message: "The native helper failed safely."
+            ),
+            afterFinishing: transaction
+        )
     }
-
-    writeJSON(response)
 }
 
 private func replaceCommand(delay: TimeInterval) {
@@ -1750,186 +2063,200 @@ private func replaceCommand(delay: TimeInterval) {
     }
 
     let pasteboard = NSPasteboard.general
-    let clipboardSnapshots = captureClipboard(pasteboard)
+    let transaction: ClipboardTransaction
 
-    // AXValue is only the rendered projection and therefore cannot be
-    // compared with the serialized Markdown prompt. Verify the canonical
-    // prompt through Cursor's own copy pipeline instead.
-    guard let copiedOriginalText = copyEntirePromptSerialized(
-        from: focused.element,
-        pasteboard: pasteboard
-    ) else {
-        let restoreResult = restoreClipboard(
-            clipboardSnapshots,
-            pasteboard: pasteboard,
-            expectedTemporaryChangeCount: pasteboard.changeCount
+    do {
+        transaction = try ClipboardTransaction(
+            pasteboard: pasteboard
         )
-
+    } catch let error as HelperCommandError {
+        fail(error)
+    } catch {
         fail(
-            code: "original_prompt_copy_failed",
-            message: """
-            Could not copy the complete serialized Codex prompt. No \
-            replacement was performed.
-            """,
-            details: [
-                "clipboardRestored": restoreResult.restored
-            ]
+            code: "clipboard_snapshot_failed",
+            message: "Could not preserve the clipboard safely."
         )
     }
 
-    guard copiedOriginalText == request.expectedOriginalText else {
-        collapseSelectionToEnd()
+    do {
+        // AXValue is only the rendered projection and therefore cannot be
+        // compared with the serialized Markdown prompt. Verify the canonical
+        // prompt through Cursor's own copy pipeline instead.
+        guard let copiedOriginalText =
+            try copyEntirePromptSerialized(
+                from: focused.element,
+                pasteboard: pasteboard,
+                transaction: transaction
+            )
+        else {
+            throw HelperCommandError(
+                code: "original_prompt_copy_failed",
+                message: """
+                Could not copy the complete serialized Codex prompt. No \
+                replacement was performed.
+                """
+            )
+        }
 
-        let restoreResult = restoreClipboard(
-            clipboardSnapshots,
-            pasteboard: pasteboard,
-            expectedTemporaryChangeCount: pasteboard.changeCount
+        guard
+            copiedOriginalText
+                == request.expectedOriginalText
+        else {
+            try collapseSelectionToEnd()
+
+            throw HelperCommandError(
+                code: "stale_prompt",
+                message: """
+                The serialized Codex prompt changed after it was read. The \
+                replacement was cancelled to avoid overwriting newer text.
+                """,
+                details: [
+                    "expectedLength":
+                        request.expectedOriginalText.count,
+                    "copiedLength":
+                        copiedOriginalText.count,
+                    "expectedUtf16Length":
+                        utf16Length(
+                            request.expectedOriginalText
+                        ),
+                    "copiedUtf16Length":
+                        utf16Length(copiedOriginalText)
+                ]
+            )
+        }
+
+        // Cmd+C leaves the complete prompt selected. Replace the clipboard
+        // with the enhanced serialized prompt and paste through Cursor's
+        // normal input pipeline so Markdown references become clickable.
+        try terminationCheckpoint()
+        try transaction.requireTemporaryOwnership()
+        pasteboard.clearContents()
+        transaction.recordTemporaryChange()
+        try terminationCheckpoint()
+
+        try transaction.requireTemporaryOwnership()
+        guard pasteboard.setString(
+            request.replacementText,
+            forType: .string
+        ) else {
+            try collapseSelectionToEnd()
+
+            throw HelperCommandError(
+                code: "temporary_clipboard_write_failed",
+                message: """
+                Could not write replacement text to the clipboard.
+                """
+            )
+        }
+
+        transaction.recordTemporaryChange()
+        try terminationCheckpoint()
+        try transaction.requireTemporaryOwnership()
+        try postCommandV()
+
+        // Allow the Codex composer to parse pasted Markdown references and
+        // reconstruct its internal reference nodes.
+        try interruptibleSleep(
+            forTimeInterval: 0.3
         )
 
+        // Verify through the same serialized copy representation used for
+        // reading.
+        guard let copiedReplacementText =
+            try copyEntirePromptSerialized(
+                from: focused.element,
+                pasteboard: pasteboard,
+                transaction: transaction
+            )
+        else {
+            try collapseSelectionToEnd()
+
+            throw HelperCommandError(
+                code: "replacement_copy_failed",
+                message: """
+                The replacement was pasted, but its serialized form could \
+                not be copied for verification.
+                """
+            )
+        }
+
+        let replacementVerified =
+            copiedReplacementText
+                == request.replacementText
+
+        // Leave the caret at the end rather than leaving the complete prompt
+        // selected after verification.
+        try collapseSelectionToEnd()
+
+        guard replacementVerified else {
+            throw HelperCommandError(
+                code: "paste_verification_failed",
+                message: """
+                Cursor accepted the pasted prompt, but its serialized value \
+                did not exactly match the requested replacement.
+                """,
+                details: [
+                    "expectedReplacementLength":
+                        request.replacementText.count,
+                    "copiedReplacementLength":
+                        copiedReplacementText.count,
+                    "expectedReplacementUtf16Length":
+                        utf16Length(
+                            request.replacementText
+                        ),
+                    "copiedReplacementUtf16Length":
+                        utf16Length(
+                            copiedReplacementText
+                        )
+                ]
+            )
+        }
+
+        let cleanup = finishClipboardTransaction(
+            transaction,
+            shouldRestore:
+                request.restoreClipboard ?? true
+        )
+
+        var response: [String: Any] = [
+            "ok": true,
+            "selectionMethod":
+                "command-a-copy-serialized",
+            "selectionVerified": true,
+            "verificationMethod":
+                "command-a-copy-serialized",
+            "replacementVerified": true,
+            "selectionMode":
+                focused.selectionMode.rawValue,
+            "originalLength":
+                copiedOriginalText.count,
+            "replacementLength":
+                request.replacementText.count
+        ]
+
+        for (key, value) in cleanup.details {
+            response[key] = value
+        }
+
+        for (key, value) in applicationMetadata(focused.application) {
+            response[key] = value
+        }
+
+        writeJSON(response)
+    } catch let error as HelperCommandError {
         fail(
-            code: "stale_prompt",
-            message: """
-            The serialized Codex prompt changed after it was read. The \
-            replacement was cancelled to avoid overwriting newer text.
-            """,
-            details: [
-                "expectedLength": request.expectedOriginalText.count,
-                "copiedLength": copiedOriginalText.count,
-                "expectedUtf16Length":
-                    utf16Length(request.expectedOriginalText),
-                "copiedUtf16Length":
-                    utf16Length(copiedOriginalText),
-                "clipboardRestored": restoreResult.restored
-            ]
+            error,
+            afterFinishing: transaction
         )
-    }
-
-    // Cmd+C leaves the complete prompt selected. Replace the clipboard with
-    // the enhanced serialized prompt and paste through Cursor's normal input
-    // pipeline so Markdown references become clickable again.
-    pasteboard.clearContents()
-
-    guard pasteboard.setString(
-        request.replacementText,
-        forType: .string
-    ) else {
-        collapseSelectionToEnd()
-
-        let restoreResult = restoreClipboard(
-            clipboardSnapshots,
-            pasteboard: pasteboard,
-            expectedTemporaryChangeCount: pasteboard.changeCount
-        )
-
+    } catch {
         fail(
-            code: "temporary_clipboard_write_failed",
-            message: "Could not write replacement text to the clipboard.",
-            details: [
-                "clipboardRestored": restoreResult.restored
-            ]
+            HelperCommandError(
+                code: "native_helper_failed",
+                message: "The native helper failed safely."
+            ),
+            afterFinishing: transaction
         )
     }
-
-    postCommandV()
-
-    // Allow the Codex composer to parse pasted Markdown references and
-    // reconstruct its internal reference nodes.
-    Thread.sleep(forTimeInterval: 0.3)
-
-    // Verify through the same serialized copy representation used for reading.
-    guard let copiedReplacementText = copyEntirePromptSerialized(
-        from: focused.element,
-        pasteboard: pasteboard
-    ) else {
-        collapseSelectionToEnd()
-
-        let restoreResult = restoreClipboard(
-            clipboardSnapshots,
-            pasteboard: pasteboard,
-            expectedTemporaryChangeCount: pasteboard.changeCount
-        )
-
-        fail(
-            code: "replacement_copy_failed",
-            message: """
-            The replacement was pasted, but its serialized form could not be \
-            copied for verification.
-            """,
-            details: [
-                "clipboardRestored": restoreResult.restored
-            ]
-        )
-    }
-
-    let replacementVerified =
-        copiedReplacementText == request.replacementText
-
-    let verificationClipboardChangeCount = pasteboard.changeCount
-
-    // Leave the caret at the end rather than leaving the complete prompt
-    // selected after verification.
-    collapseSelectionToEnd()
-
-    let shouldRestoreClipboard = request.restoreClipboard ?? true
-
-    let clipboardResult: ClipboardRestoreResult
-
-    if shouldRestoreClipboard {
-        clipboardResult = restoreClipboard(
-            clipboardSnapshots,
-            pasteboard: pasteboard,
-            expectedTemporaryChangeCount:
-                verificationClipboardChangeCount
-        )
-    } else {
-        clipboardResult = ClipboardRestoreResult(
-            restored: false,
-            skippedBecauseChanged: false
-        )
-    }
-
-    guard replacementVerified else {
-        fail(
-            code: "paste_verification_failed",
-            message: """
-            Cursor accepted the pasted prompt, but its serialized value did \
-            not exactly match the requested replacement.
-            """,
-            details: [
-                "expectedReplacementLength":
-                    request.replacementText.count,
-                "copiedReplacementLength":
-                    copiedReplacementText.count,
-                "expectedReplacementUtf16Length":
-                    utf16Length(request.replacementText),
-                "copiedReplacementUtf16Length":
-                    utf16Length(copiedReplacementText),
-                "clipboardRestored": clipboardResult.restored,
-                "clipboardRestoreSkippedBecauseChanged":
-                    clipboardResult.skippedBecauseChanged
-            ]
-        )
-    }
-
-    var response: [String: Any] = [
-        "ok": true,
-        "selectionMethod": "command-a-copy-serialized",
-        "selectionVerified": true,
-        "verificationMethod": "command-a-copy-serialized",
-        "replacementVerified": true,
-        "selectionMode": focused.selectionMode.rawValue,
-        "originalLength": copiedOriginalText.count,
-        "replacementLength": request.replacementText.count,
-        "clipboardRestored": clipboardResult.restored,
-        "clipboardRestoreSkippedBecauseChanged":
-            clipboardResult.skippedBecauseChanged
-    ]
-
-    for (key, value) in applicationMetadata(focused.application) {
-        response[key] = value
-    }
-
-    writeJSON(response)
 }
 
 private func usage() -> Never {
@@ -1956,6 +2283,8 @@ private func usage() -> Never {
 }
 
 // MARK: - Entry point
+
+_ = cooperativeSignalMonitor
 
 let arguments = CommandLine.arguments
 

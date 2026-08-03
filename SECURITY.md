@@ -47,8 +47,13 @@ The project reduces risk by:
 - requiring strong Codex-specific semantic and geometry evidence before using accessibility fallback discovery;
 - binding replacement to a prompt-free fingerprint of the composer originally read;
 - refusing stale or unverifiable replacements;
-- restoring the clipboard;
+- limiting clipboard snapshots to 128 MiB, 32 items, and 128 representations before any pasteboard mutation;
+- restoring helper-owned temporary clipboard state on success, handled failures, and cooperative `SIGTERM` or `SIGINT`;
+- preserving newer clipboard changes made concurrently by the user or another application;
+- giving helper termination five seconds for cooperative cleanup while retaining a two-second Codex process grace period;
 - recording only structured, allowlisted failure metadata rather than raw child-process output.
+
+Clipboard restoration cannot be guaranteed after `SIGKILL`, a process crash, power loss, or an unresponsive macOS pasteboard. Snapshot diagnostics contain only byte, item, representation, and configured-limit counts; clipboard contents and type names are not logged.
 
 ## Important trust boundaries
 

@@ -42,7 +42,7 @@ Cmd+C
 
 This is important because the rendered accessibility value contains only visible reference labels, while the clipboard serialization contains the full Markdown-style reference targets.
 
-The helper restores the original clipboard after reading.
+Before modifying the pasteboard, the helper snapshots at most 128 MiB across 32 items and 128 representations. Exceeding any limit returns `clipboard_snapshot_limit_exceeded` before the pasteboard is cleared or changed. The helper restores an accepted snapshot after reading.
 
 The read response also contains a SHA-256 target fingerprint derived from prompt-free structural metadata such as the Cursor PID, window and element frames, accessibility role path, stable identifiers, and matched evidence names.
 
@@ -115,7 +115,7 @@ When the user edits the prompt while enhancement is running, the helper returns 
 
 The helper:
 
-1. snapshots the clipboard;
+1. snapshots the clipboard within the fixed safety limits;
 2. selects the composer text with `Cmd+A`;
 3. verifies the original serialized prompt;
 4. writes the replacement to the clipboard;
@@ -125,6 +125,10 @@ The helper:
 8. collapses the selection.
 
 Using an actual paste is necessary for Cursor to reconstruct clickable inline references.
+
+Clipboard operations run inside one transaction. The transaction tracks the helper-owned pasteboard change count and performs centralized cleanup after success, handled failure, timeout, or cooperative termination. If another application changes the clipboard, the newer change wins and restoration is skipped rather than overwritten.
+
+The helper records `SIGTERM` and `SIGINT` through dispatch signal sources and checks for termination around clipboard capture, mutation, copy, paste, verification, and waits. The extension gives the helper five seconds to restore temporary clipboard state before escalating to `SIGKILL`. Codex subprocesses retain a two-second termination grace period. Repeated timeout or cancellation requests share one `SIGTERM`, one escalation timer, and one cleanup path.
 
 ## Attachment behavior
 
@@ -166,7 +170,7 @@ The output channel records operational metadata such as:
 - process result;
 - structured failure metadata.
 
-Codex stdout and stderr are drained and counted but never retained or written to the output channel. Native-helper failures expose only an allowlist of scalar operational fields.
+Codex stdout and stderr are drained and counted but never retained or written to the output channel. Native-helper failures expose only an allowlist of scalar operational fields. Clipboard diagnostics include only byte, item, representation, and configured-limit counts, never contents or pasteboard type names.
 
 It should never log:
 
@@ -189,8 +193,12 @@ It aborts when:
 - Codex cannot start;
 - Codex times out;
 - the prompt changes during enhancement;
+- the clipboard snapshot exceeds a fixed safety limit;
+- the clipboard changes while the helper owns temporary pasteboard state;
 - a reference placeholder is missing or duplicated;
 - replacement verification fails.
+
+Clipboard restoration is not guaranteed after `SIGKILL`, a helper crash, power loss, or an unresponsive pasteboard. These are operating-system limits rather than recoverable helper failures.
 
 ## Security assumptions
 
