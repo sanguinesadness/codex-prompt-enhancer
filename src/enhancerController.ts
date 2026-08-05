@@ -331,6 +331,21 @@ function getUserFacingError(
         "Nothing was changed.",
       ].join(" ");
 
+    case "paste_not_applied":
+    case "paste_chunk_not_applied":
+    case "paste_verification_failed":
+      return error.details?.promptRollbackVerified === true
+        ? [
+          "Cursor did not apply the enhanced prompt safely.",
+          "The original prompt and clipboard were preserved.",
+          "Keep the composer focused and try again.",
+        ].join(" ")
+        : [
+          "Cursor did not apply the enhanced prompt safely.",
+          "Review the composer before retrying because automatic prompt restoration could not be verified.",
+          "The clipboard was restored when it was safe to do so.",
+        ].join(" ");
+
     default:
       return error.message;
     }

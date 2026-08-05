@@ -1,3 +1,8 @@
+import {
+  planSerializedPromptPaste,
+  SerializedPasteChunk,
+} from "./referenceProtection";
+
 export interface HelperPayload {
   readonly ok: boolean;
   readonly error?: string;
@@ -9,6 +14,8 @@ export interface AccessibilityReplaceRequest {
   readonly expectedOriginalText: string;
   readonly expectedTargetFingerprint: string;
   readonly replacementText: string;
+  readonly replacementChunks:
+    readonly SerializedPasteChunk[];
   readonly restoreClipboard: true;
 }
 
@@ -64,6 +71,10 @@ export function buildAccessibilityReplaceRequest(
     expectedOriginalText,
     expectedTargetFingerprint,
     replacementText,
+    replacementChunks:
+      planSerializedPromptPaste(
+        replacementText,
+      ),
     restoreClipboard: true,
   };
 }
@@ -97,6 +108,21 @@ const SAFE_HELPER_DIAGNOSTIC_KEYS = new Set([
   "copiedReplacementLength",
   "expectedReplacementUtf16Length",
   "copiedReplacementUtf16Length",
+  "pasteApplicationChangeObserved",
+  "pasteApplicationStabilized",
+  "pasteApplicationTimeoutMilliseconds",
+  "pasteChunkIndex",
+  "pasteChunkCount",
+  "pasteChunkUtf16Length",
+  "pasteChunkMaximumUtf16Length",
+  "pasteChunkBoundaryKind",
+  "verificationMode",
+  "referenceWhitespaceNormalizationCount",
+  "pasteEventsIssued",
+  "promptRollbackUndoCount",
+  "promptRollbackSkippedBecauseChanged",
+  "promptRollbackAttempted",
+  "promptRollbackVerified",
   "stdoutBytes",
   "stderrBytes",
   "exitCode",

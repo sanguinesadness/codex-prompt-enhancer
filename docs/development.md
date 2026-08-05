@@ -191,6 +191,13 @@ Avoid hardcoding user-specific paths outside default configuration handling.
 - Clipboard is restored after failure
 - Helper cancellation and timeout allow five seconds for cooperative clipboard cleanup
 - Concurrent clipboard changes are preserved rather than overwritten
+- Long prompts use at most 32 chunks of 1,800 UTF-16 units and split only at preserved paragraph, line, or whitespace boundaries
+- References, links, autolinks, inline and fenced code, paired emphasis, words, and Unicode pairs remain indivisible
+- Oversized protected structures and unavailable safe boundaries fail before helper invocation
+- Each chunk remains text, waits for stabilization, and explicitly leaves the caret at the composer end
+- Partial failure uses at most one `Cmd+Z` per helper paste and requires exact original-prompt verification
+- Verification permits only documented single ASCII spaces immediately beside otherwise identical ordered reference tokens
+- An unchanged composer after a chunk paste returns `paste_chunk_not_applied`
 - Failed verification leaves the original prompt intact
 
 ### Installation
@@ -212,9 +219,9 @@ Before changing it:
 3. preserve bounded, centralized clipboard restoration;
 4. preserve replacement verification;
 5. refuse ambiguous accessibility targets;
-6. test with inline references and attachment chips.
+6. test with long prompts, inline references, and attachment chips.
 
-Composer eligibility, fallback selection, ambiguity handling, and target fingerprints are implemented in `native/ComposerValidation.swift`. Clipboard budgets, transaction ownership, and termination-request state are implemented in `native/ClipboardSafety.swift`. Run the native regression harness directly with:
+Composer eligibility, fallback selection, ambiguity handling, and target fingerprints are implemented in `native/ComposerValidation.swift`. Clipboard budgets, transaction ownership, and termination-request state are implemented in `native/ClipboardSafety.swift`. Serialized verification and bounded undo state are implemented in `native/PromptPasteSafety.swift`. Run the native regression harness directly with:
 
 ```bash
 npm run test:native

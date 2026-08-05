@@ -73,6 +73,51 @@ struct ClipboardRestoreResult: Equatable {
     let skippedBecauseChanged: Bool
 }
 
+struct PasteApplicationTracker {
+    private let originalValue: String
+    private let requiredStableObservations: Int
+    private var lastChangedValue: String?
+    private var stableObservationCount = 0
+
+    private(set) var observedChange = false
+
+    init(
+        originalValue: String,
+        requiredStableObservations: Int
+    ) {
+        self.originalValue = originalValue
+        self.requiredStableObservations = max(
+            1,
+            requiredStableObservations
+        )
+    }
+
+    mutating func observe(
+        _ currentValue: String?
+    ) -> Bool {
+        guard
+            let currentValue,
+            currentValue != originalValue
+        else {
+            lastChangedValue = nil
+            stableObservationCount = 0
+            return false
+        }
+
+        observedChange = true
+
+        if currentValue == lastChangedValue {
+            stableObservationCount += 1
+        } else {
+            lastChangedValue = currentValue
+            stableObservationCount = 1
+        }
+
+        return stableObservationCount
+            >= requiredStableObservations
+    }
+}
+
 final class ClipboardTransactionCoordinator {
     private var expectedTemporaryChangeCount: Int?
     private var finished = false
