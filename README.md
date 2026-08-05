@@ -18,6 +18,7 @@ Codex Prompt Enhancer removes that intermediate step. It reads the text already 
 - Enhances the focused, unsent Codex prompt with **Cmd+Shift+R**
 - Preserves the original language and intent
 - Preserves clickable inline file and folder references
+- Keeps long enhanced prompts in the text field by pasting bounded, reference-safe chunks
 - Leaves screenshot, file, and folder attachment chips attached
 - Never sends the enhanced prompt automatically
 - Restores clipboard snapshots up to 128 MiB after replacement and handled failures
@@ -98,6 +99,7 @@ During enhancement:
 - accessibility fallback requires strong Codex-specific semantic and geometry evidence;
 - clipboard snapshots are limited to 128 MiB, 32 items, and 128 representations and fail before mutation when oversized;
 - handled helper cancellation and timeout requests restore helper-owned temporary clipboard state before exit;
+- long replacements are pasted in bounded chunks so Cursor does not convert one large paste into a text-file attachment;
 - replacement is aborted when the validated composer target or prompt text changed while the model was running.
 
 See [Architecture and security model](docs/architecture.md) for the full flow.
@@ -182,11 +184,13 @@ Native helper checks the same composer target fingerprint
 and verifies that the original prompt is still current
         │
         ▼
-Enhanced text is pasted back with Cmd+V
+Enhanced text is pasted back in bounded chunks with Cmd+V
         │
         ▼
 Clipboard is restored; prompt remains unsent
 ```
+
+Each paste chunk is at most 1,800 UTF-16 units and ends at an existing paragraph, line, or whitespace boundary. References, links, code spans, fenced code blocks, autolinks, emphasis, words, and Unicode pairs remain indivisible. Final verification accepts exact equality or only Cursor's narrowly defined single-space normalization beside reference chips. A partial failure is rolled back with no more `Cmd+Z` operations than the helper's own paste events, then verified against the original prompt.
 
 ## Known limitations
 
@@ -196,6 +200,7 @@ Clipboard is restored; prompt remains unsent
 - Cursor must be launched with renderer accessibility enabled
 - The status-bar item is informational rather than interactive
 - Attachment contents are intentionally not analyzed
+- A replacement requiring more than 32 chunks, or containing one indivisible Markdown structure over 1,800 UTF-16 units, fails before composer mutation
 - Clipboard restoration cannot be guaranteed after `SIGKILL`, a process crash, power loss, or an unresponsive macOS pasteboard
 - Accessibility behavior may change when Cursor updates its Electron or Codex UI implementation
 

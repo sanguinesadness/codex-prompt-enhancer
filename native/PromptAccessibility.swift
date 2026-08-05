@@ -15,10 +15,16 @@ private let knownCursorBundleIdentifiers: Set<String> = [
 private let selectAllKeyCode: CGKeyCode = 0   // Physical A key.
 private let copyKeyCode: CGKeyCode = 8        // Physical C key.
 private let pasteKeyCode: CGKeyCode = 9       // Physical V key.
+private let undoKeyCode: CGKeyCode = 6        // Physical Z key.
 private let rightArrowKeyCode: CGKeyCode = 124
 private let focusAttempts = 20
 private let focusRetryDelay: TimeInterval = 0.1
 private let pasteVerificationTimeout: TimeInterval = 3.0
+private let pasteApplicationTimeout: TimeInterval = 5.0
+private let pasteApplicationPollDelay: TimeInterval = 0.05
+private let pasteStableObservationCount = 3
+private let maximumPasteChunkUtf16Length = 1_800
+private let maximumPasteChunkCount = 32
 
 // MARK: - Input models
 
@@ -26,7 +32,20 @@ private struct ReplaceRequest: Decodable {
     let expectedOriginalText: String
     let expectedTargetFingerprint: String
     let replacementText: String
+    let replacementChunks: [PasteChunkRequest]
     let restoreClipboard: Bool?
+}
+
+private enum PasteChunkBoundaryKind: String, Decodable {
+    case paragraph
+    case line
+    case whitespace
+    case end
+}
+
+private struct PasteChunkRequest: Decodable {
+    let text: String
+    let boundaryKind: PasteChunkBoundaryKind
 }
 
 // MARK: - Internal models
@@ -70,6 +89,13 @@ private struct HelperCommandError: Error {
         self.status = status
         self.details = details
     }
+}
+
+private struct PromptRollbackResult {
+    let attempted: Bool
+    let verified: Bool
+    let undoCount: Int
+    let skippedBecauseChanged: Bool
 }
 
 // MARK: - JSON output
@@ -1682,14 +1708,21 @@ private func finishClipboardTransaction(
 private func fail(
     _ error: HelperCommandError,
     afterFinishing transaction:
-        ClipboardTransaction
+        ClipboardTransaction,
+    additionalDetails: [String: Any] = [:]
 ) -> Never {
     let cleanup = finishClipboardTransaction(
         transaction
     )
+    var details = cleanup.details
+
+    for (key, value) in additionalDetails {
+        details[key] = value
+    }
+
     fail(
         error,
-        additionalDetails: cleanup.details
+        additionalDetails: details
     )
 }
 
@@ -1753,11 +1786,65 @@ private func postCommandV() throws {
     try postCommandKey(pasteKeyCode)
 }
 
+private func postCommandZ() throws {
+    try postCommandKey(undoKeyCode)
+}
+
 private func collapseSelectionToEnd() throws {
     try postKey(
         rightArrowKeyCode,
         flags: CGEventFlags(rawValue: 0)
     )
+
+    try interruptibleSleep(
+        forTimeInterval: 0.05
+    )
+}
+
+private func placeCaretAtComposerEnd(
+    _ textArea: AXUIElement
+) throws {
+    try terminationCheckpoint()
+
+    let characterCount = integerAttribute(
+        textArea,
+        kAXNumberOfCharactersAttribute as CFString
+    ) ?? utf16Length(
+        stringAttribute(
+            textArea,
+            kAXValueAttribute as CFString
+        ) ?? ""
+    )
+    var range = CFRange(
+        location: characterCount,
+        length: 0
+    )
+
+    guard let rangeValue = AXValueCreate(
+        .cfRange,
+        &range
+    ) else {
+        throw HelperCommandError(
+            code: "composer_caret_position_failed",
+            message: "Could not position the Codex composer caret safely."
+        )
+    }
+
+    let error = AXUIElementSetAttributeValue(
+        textArea,
+        kAXSelectedTextRangeAttribute as CFString,
+        rangeValue
+    )
+
+    guard error == .success else {
+        throw HelperCommandError(
+            code: "composer_caret_position_failed",
+            message: "Could not position the Codex composer caret safely.",
+            details: [
+                "axError": error.rawValue
+            ]
+        )
+    }
 
     try interruptibleSleep(
         forTimeInterval: 0.05
@@ -1861,6 +1948,331 @@ private func waitForReplacement(
     }
 
     return false
+}
+
+private struct PasteApplicationWaitResult {
+    let observedChange: Bool
+    let stabilized: Bool
+}
+
+private struct PasteChunksResult {
+    let observedChange: Bool
+    let stabilized: Bool
+}
+
+private func waitForPasteApplication(
+    in textArea: AXUIElement,
+    originalRenderedText: String
+) throws -> PasteApplicationWaitResult {
+    let deadline = Date().addingTimeInterval(
+        pasteApplicationTimeout
+    )
+    var tracker = PasteApplicationTracker(
+        originalValue: originalRenderedText,
+        requiredStableObservations:
+            pasteStableObservationCount
+    )
+
+    while Date() < deadline {
+        try terminationCheckpoint()
+
+        let currentValue = stringAttribute(
+            textArea,
+            kAXValueAttribute as CFString
+        )
+
+        if tracker.observe(currentValue) {
+            return PasteApplicationWaitResult(
+                observedChange: true,
+                stabilized: true
+            )
+        }
+
+        try interruptibleSleep(
+            forTimeInterval:
+                pasteApplicationPollDelay
+        )
+    }
+
+    try terminationCheckpoint()
+
+    return PasteApplicationWaitResult(
+        observedChange: tracker.observedChange,
+        stabilized: false
+    )
+}
+
+private func validatePasteChunks(
+    _ chunks: [PasteChunkRequest],
+    expectedText: String
+) -> [PasteChunkRequest] {
+    guard
+        !chunks.isEmpty,
+        chunks.count <= maximumPasteChunkCount,
+        chunks.allSatisfy({
+            !$0.text.isEmpty
+                && utf16Length($0.text)
+                    <= maximumPasteChunkUtf16Length
+        }),
+        chunks.map(\.text).joined() == expectedText,
+        chunks.last?.boundaryKind == .end,
+        chunks.dropLast().allSatisfy({
+            $0.boundaryKind != .end
+        })
+    else {
+        fail(
+            code: "invalid_replace_request",
+            message: """
+            Replace received invalid serialized paste chunks.
+            """,
+            status: 64,
+            details: [
+                "pasteChunkCount": chunks.count,
+                "pasteChunkMaximumUtf16Length":
+                    maximumPasteChunkUtf16Length
+            ]
+        )
+    }
+
+    return chunks
+}
+
+private func pasteSerializedChunks(
+    _ chunks: [PasteChunkRequest],
+    into textArea: AXUIElement,
+    initialRenderedText: String,
+    pasteboard: NSPasteboard,
+    transaction: ClipboardTransaction,
+    undoTracker: inout PasteUndoTracker
+) throws -> PasteChunksResult {
+    var previousRenderedText = initialRenderedText
+    var allChunksStabilized = true
+
+    for (index, chunk) in chunks.enumerated() {
+        try terminationCheckpoint()
+        try transaction.requireTemporaryOwnership()
+        pasteboard.clearContents()
+        transaction.recordTemporaryChange()
+        try terminationCheckpoint()
+        try transaction.requireTemporaryOwnership()
+
+        guard pasteboard.setString(
+            chunk.text,
+            forType: .string
+        ) else {
+            throw HelperCommandError(
+                code: "temporary_clipboard_write_failed",
+                message: """
+                Could not write a replacement chunk to the clipboard.
+                """,
+                details: [
+                    "pasteChunkIndex": index + 1,
+                    "pasteChunkCount": chunks.count,
+                    "pasteChunkBoundaryKind":
+                        chunk.boundaryKind.rawValue
+                ]
+            )
+        }
+
+        transaction.recordTemporaryChange()
+        try terminationCheckpoint()
+        try transaction.requireTemporaryOwnership()
+        try postCommandV()
+        undoTracker.recordPasteEvent()
+
+        let application =
+            try waitForPasteApplication(
+                in: textArea,
+                originalRenderedText:
+                    previousRenderedText
+            )
+
+        guard application.observedChange else {
+            throw HelperCommandError(
+                code: "paste_chunk_not_applied",
+                message: """
+                Cursor did not apply a serialized prompt chunk as text.
+                """,
+                details: [
+                    "pasteChunkIndex": index + 1,
+                    "pasteChunkCount": chunks.count,
+                    "pasteChunkUtf16Length":
+                        utf16Length(chunk.text),
+                    "pasteChunkBoundaryKind":
+                        chunk.boundaryKind.rawValue,
+                    "pasteApplicationChangeObserved": false,
+                    "pasteApplicationStabilized": false,
+                    "pasteApplicationTimeoutMilliseconds":
+                        Int(
+                            pasteApplicationTimeout
+                                * 1_000
+                        )
+                ]
+            )
+        }
+
+        allChunksStabilized =
+            allChunksStabilized
+                && application.stabilized
+
+        previousRenderedText = stringAttribute(
+            textArea,
+            kAXValueAttribute as CFString
+        ) ?? previousRenderedText
+        undoTracker.recordObservedRenderedValue(
+            previousRenderedText
+        )
+
+        try placeCaretAtComposerEnd(textArea)
+    }
+
+    return PasteChunksResult(
+        observedChange: true,
+        stabilized: allChunksStabilized
+    )
+}
+
+private func isSameFocusedTextArea(
+    _ focused: FocusedTextArea
+) -> Bool {
+    let applicationElement = AXUIElementCreateApplication(
+        focused.application.processIdentifier
+    )
+    let focusedResult = copyAttribute(
+        applicationElement,
+        kAXFocusedUIElementAttribute as CFString
+    )
+
+    guard
+        focusedResult.error == .success,
+        let rawElement = focusedResult.value,
+        CFGetTypeID(rawElement)
+            == AXUIElementGetTypeID()
+    else {
+        return false
+    }
+
+    let focusedElement = rawElement as! AXUIElement
+
+    guard let textArea = nearestWritableTextArea(
+        from: focusedElement
+    ) else {
+        return false
+    }
+
+    return CFEqual(textArea, focused.element)
+}
+
+private func undoReplacement(
+    expectedOriginalText: String,
+    originalRenderedText: String,
+    focused: FocusedTextArea,
+    pasteboard: NSPasteboard,
+    transaction: ClipboardTransaction,
+    undoTracker: inout PasteUndoTracker
+) -> PromptRollbackResult {
+    guard undoTracker.pasteEventsIssued > 0 else {
+        return PromptRollbackResult(
+            attempted: false,
+            verified: true,
+            undoCount: 0,
+            skippedBecauseChanged: false
+        )
+    }
+
+    let currentRenderedText = stringAttribute(
+        focused.element,
+        kAXValueAttribute as CFString
+    )
+
+    guard undoTracker.mayBeginRollback(
+        sameTarget: isSameFocusedTextArea(focused),
+        currentRenderedValue: currentRenderedText
+    ) else {
+        return PromptRollbackResult(
+            attempted: false,
+            verified: false,
+            undoCount: undoTracker.undoCount,
+            skippedBecauseChanged: true
+        )
+    }
+
+    var expectedRenderedText = currentRenderedText
+
+    do {
+        while undoTracker.canUndo {
+            guard
+                isSameFocusedTextArea(focused),
+                stringAttribute(
+                    focused.element,
+                    kAXValueAttribute as CFString
+                ) == expectedRenderedText
+            else {
+                return PromptRollbackResult(
+                    attempted: undoTracker.undoCount > 0,
+                    verified: false,
+                    undoCount: undoTracker.undoCount,
+                    skippedBecauseChanged: true
+                )
+            }
+
+            let beforeUndo = expectedRenderedText ?? ""
+            try postCommandZ()
+            _ = undoTracker.recordUndo()
+
+            _ = try waitForPasteApplication(
+                in: focused.element,
+                originalRenderedText: beforeUndo
+            )
+
+            expectedRenderedText = stringAttribute(
+                focused.element,
+                kAXValueAttribute as CFString
+            )
+
+            guard expectedRenderedText == originalRenderedText else {
+                continue
+            }
+
+            guard let copiedText =
+                try copyEntirePromptSerialized(
+                    from: focused.element,
+                    pasteboard: pasteboard,
+                    transaction: transaction
+                )
+            else {
+                return PromptRollbackResult(
+                    attempted: true,
+                    verified: false,
+                    undoCount: undoTracker.undoCount,
+                    skippedBecauseChanged: false
+                )
+            }
+
+            try collapseSelectionToEnd()
+
+            return PromptRollbackResult(
+                attempted: true,
+                verified: copiedText == expectedOriginalText,
+                undoCount: undoTracker.undoCount,
+                skippedBecauseChanged: false
+            )
+        }
+
+        return PromptRollbackResult(
+            attempted: undoTracker.undoCount > 0,
+            verified: false,
+            undoCount: undoTracker.undoCount,
+            skippedBecauseChanged: false
+        )
+    } catch {
+        return PromptRollbackResult(
+            attempted: undoTracker.undoCount > 0,
+            verified: false,
+            undoCount: undoTracker.undoCount,
+            skippedBecauseChanged: false
+        )
+    }
 }
 
 // MARK: - Commands
@@ -2025,8 +2437,8 @@ private func replaceCommand(delay: TimeInterval) {
             code: "invalid_replace_request",
             message: """
             Replace expects JSON containing expectedOriginalText, \
-            expectedTargetFingerprint, replacementText, and optional \
-            restoreClipboard.
+            expectedTargetFingerprint, replacementText, replacementChunks, \
+            and optional restoreClipboard.
             """,
             status: 64,
             details: [
@@ -2043,7 +2455,16 @@ private func replaceCommand(delay: TimeInterval) {
         )
     }
 
+    let replacementChunks =
+        validatePasteChunks(
+            request.replacementChunks,
+            expectedText: request.replacementText
+        )
+
     let focused = findFocusedTextArea(delay: delay)
+    var undoTracker = PasteUndoTracker(
+        initialRenderedValue: focused.text
+    )
 
     guard
         focused.targetFingerprint
@@ -2125,39 +2546,23 @@ private func replaceCommand(delay: TimeInterval) {
             )
         }
 
-        // Cmd+C leaves the complete prompt selected. Replace the clipboard
-        // with the enhanced serialized prompt and paste through Cursor's
-        // normal input pipeline so Markdown references become clickable.
-        try terminationCheckpoint()
-        try transaction.requireTemporaryOwnership()
-        pasteboard.clearContents()
-        transaction.recordTemporaryChange()
-        try terminationCheckpoint()
-
-        try transaction.requireTemporaryOwnership()
-        guard pasteboard.setString(
-            request.replacementText,
-            forType: .string
-        ) else {
-            try collapseSelectionToEnd()
-
-            throw HelperCommandError(
-                code: "temporary_clipboard_write_failed",
-                message: """
-                Could not write replacement text to the clipboard.
-                """
+        // Cmd+C leaves the complete prompt selected. Paste bounded chunks so
+        // Cursor keeps long content in the text field instead of converting
+        // one large paste into a text-file attachment. Local Markdown
+        // references remain atomic within their chunks.
+        let pasteApplication =
+            try pasteSerializedChunks(
+                replacementChunks,
+                into: focused.element,
+                initialRenderedText: focused.text,
+                pasteboard: pasteboard,
+                transaction: transaction,
+                undoTracker: &undoTracker
             )
-        }
 
-        transaction.recordTemporaryChange()
-        try terminationCheckpoint()
-        try transaction.requireTemporaryOwnership()
-        try postCommandV()
-
-        // Allow the Codex composer to parse pasted Markdown references and
-        // reconstruct its internal reference nodes.
         try interruptibleSleep(
-            forTimeInterval: 0.3
+            forTimeInterval:
+                pasteApplicationPollDelay
         )
 
         // Verify through the same serialized copy representation used for
@@ -2180,21 +2585,33 @@ private func replaceCommand(delay: TimeInterval) {
             )
         }
 
-        let replacementVerified =
-            copiedReplacementText
-                == request.replacementText
+        let verification = verifySerializedPrompt(
+            expected: request.replacementText,
+            actual: copiedReplacementText
+        )
 
         // Leave the caret at the end rather than leaving the complete prompt
         // selected after verification.
         try collapseSelectionToEnd()
 
-        guard replacementVerified else {
+        guard let verification else {
+            let pasteWasNotApplied =
+                copiedReplacementText
+                    == request.expectedOriginalText
+
             throw HelperCommandError(
-                code: "paste_verification_failed",
-                message: """
-                Cursor accepted the pasted prompt, but its serialized value \
-                did not exactly match the requested replacement.
-                """,
+                code: pasteWasNotApplied
+                    ? "paste_not_applied"
+                    : "paste_verification_failed",
+                message: pasteWasNotApplied
+                    ? """
+                    Cursor did not apply the enhanced prompt before \
+                    verification. The original prompt was preserved.
+                    """
+                    : """
+                    Cursor applied a prompt whose serialized value did not \
+                    match the requested replacement safely.
+                    """,
                 details: [
                     "expectedReplacementLength":
                         request.replacementText.count,
@@ -2207,7 +2624,21 @@ private func replaceCommand(delay: TimeInterval) {
                     "copiedReplacementUtf16Length":
                         utf16Length(
                             copiedReplacementText
-                        )
+                        ),
+                    "pasteApplicationChangeObserved":
+                        pasteApplication.observedChange,
+                    "pasteApplicationStabilized":
+                        pasteApplication.stabilized,
+                    "pasteApplicationTimeoutMilliseconds":
+                        Int(
+                            pasteApplicationTimeout
+                                * 1_000
+                        ),
+                    "pasteChunkCount":
+                        replacementChunks.count,
+                    "pasteEventsIssued":
+                        undoTracker.pasteEventsIssued,
+                    "verificationMode": "mismatch"
                 ]
             )
         }
@@ -2231,7 +2662,15 @@ private func replaceCommand(delay: TimeInterval) {
             "originalLength":
                 copiedOriginalText.count,
             "replacementLength":
-                request.replacementText.count
+                request.replacementText.count,
+            "pasteChunkCount":
+                replacementChunks.count,
+            "pasteEventsIssued":
+                undoTracker.pasteEventsIssued,
+            "verificationMode":
+                verification.mode.rawValue,
+            "referenceWhitespaceNormalizationCount":
+                verification.referenceWhitespaceNormalizationCount
         ]
 
         for (key, value) in cleanup.details {
@@ -2244,17 +2683,71 @@ private func replaceCommand(delay: TimeInterval) {
 
         writeJSON(response)
     } catch let error as HelperCommandError {
+        let rollback = error.code
+            == "native_helper_terminated"
+            ? PromptRollbackResult(
+                attempted: false,
+                verified:
+                    undoTracker.pasteEventsIssued == 0,
+                undoCount: 0,
+                skippedBecauseChanged:
+                    undoTracker.pasteEventsIssued > 0
+            )
+            : undoReplacement(
+                expectedOriginalText:
+                    request.expectedOriginalText,
+                originalRenderedText: focused.text,
+                focused: focused,
+                pasteboard: pasteboard,
+                transaction: transaction,
+                undoTracker: &undoTracker
+            )
+
         fail(
             error,
-            afterFinishing: transaction
+            afterFinishing: transaction,
+            additionalDetails: [
+                "promptRollbackAttempted":
+                    rollback.attempted,
+                "promptRollbackVerified":
+                    rollback.verified,
+                "promptRollbackUndoCount":
+                    rollback.undoCount,
+                "promptRollbackSkippedBecauseChanged":
+                    rollback.skippedBecauseChanged,
+                "pasteEventsIssued":
+                    undoTracker.pasteEventsIssued
+            ]
         )
     } catch {
+        let rollback = undoReplacement(
+            expectedOriginalText:
+                request.expectedOriginalText,
+            originalRenderedText: focused.text,
+            focused: focused,
+            pasteboard: pasteboard,
+            transaction: transaction,
+            undoTracker: &undoTracker
+        )
+
         fail(
             HelperCommandError(
                 code: "native_helper_failed",
                 message: "The native helper failed safely."
             ),
-            afterFinishing: transaction
+            afterFinishing: transaction,
+            additionalDetails: [
+                "promptRollbackAttempted":
+                    rollback.attempted,
+                "promptRollbackVerified":
+                    rollback.verified,
+                "promptRollbackUndoCount":
+                    rollback.undoCount,
+                "promptRollbackSkippedBecauseChanged":
+                    rollback.skippedBecauseChanged,
+                "pasteEventsIssued":
+                    undoTracker.pasteEventsIssued
+            ]
         )
     }
 }
@@ -2275,6 +2768,9 @@ private func usage() -> Never {
             "expectedOriginalText": "...",
             "expectedTargetFingerprint": "...",
             "replacementText": "...",
+            "replacementChunks": [
+              {"text": "...", "boundaryKind": "end"}
+            ],
             "restoreClipboard": true
           }
         """,

@@ -68,6 +68,12 @@ describe("accessibility helper protocol", () => {
       expectedOriginalText: "Original synthetic prompt",
       expectedTargetFingerprint: fingerprint,
       replacementText: "Enhanced synthetic prompt",
+      replacementChunks: [
+        {
+          text: "Enhanced synthetic prompt",
+          boundaryKind: "end",
+        },
+      ],
       restoreClipboard: true,
     });
     assert.throws(
@@ -107,6 +113,21 @@ describe("accessibility helper protocol", () => {
       clipboardSnapshotMaximumBytes: 134217728,
       clipboardSnapshotMaximumItems: 32,
       clipboardSnapshotMaximumRepresentations: 128,
+      pasteApplicationChangeObserved: true,
+      pasteApplicationStabilized: true,
+      pasteApplicationTimeoutMilliseconds: 5000,
+      pasteChunkIndex: 2,
+      pasteChunkCount: 5,
+      pasteChunkUtf16Length: 1800,
+      pasteChunkMaximumUtf16Length: 1800,
+      pasteChunkBoundaryKind: "paragraph",
+      verificationMode: "reference_whitespace_normalized",
+      referenceWhitespaceNormalizationCount: 4,
+      pasteEventsIssued: 5,
+      promptRollbackAttempted: true,
+      promptRollbackVerified: true,
+      promptRollbackUndoCount: 3,
+      promptRollbackSkippedBecauseChanged: false,
       clipboardTypes: [
         "public.synthetic-secret",
       ],
@@ -133,6 +154,42 @@ describe("accessibility helper protocol", () => {
     assert.equal(
       safeFields.clipboardSnapshotMaximumRepresentations,
       128,
+    );
+    assert.equal(
+      safeFields.pasteApplicationChangeObserved,
+      true,
+    );
+    assert.equal(
+      safeFields.pasteApplicationStabilized,
+      true,
+    );
+    assert.equal(
+      safeFields.pasteApplicationTimeoutMilliseconds,
+      5000,
+    );
+    assert.equal(safeFields.pasteChunkIndex, 2);
+    assert.equal(safeFields.pasteChunkCount, 5);
+    assert.equal(safeFields.pasteChunkUtf16Length, 1800);
+    assert.equal(
+      safeFields.pasteChunkMaximumUtf16Length,
+      1800,
+    );
+    assert.equal(safeFields.pasteChunkBoundaryKind, "paragraph");
+    assert.equal(
+      safeFields.verificationMode,
+      "reference_whitespace_normalized",
+    );
+    assert.equal(
+      safeFields.referenceWhitespaceNormalizationCount,
+      4,
+    );
+    assert.equal(safeFields.pasteEventsIssued, 5);
+    assert.equal(safeFields.promptRollbackAttempted, true);
+    assert.equal(safeFields.promptRollbackVerified, true);
+    assert.equal(safeFields.promptRollbackUndoCount, 3);
+    assert.equal(
+      safeFields.promptRollbackSkippedBecauseChanged,
+      false,
     );
     assert.equal("expectedOriginalText" in safeFields, false);
     assert.equal("replacementText" in safeFields, false);

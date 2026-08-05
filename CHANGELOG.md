@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Pastes long replacements in at most 32 structure-aware chunks so Cursor keeps them in the prompt field without splitting Markdown structures, words, or Unicode pairs.
+- Places the caret explicitly after every chunk and verifies exact content with only narrowly defined reference-chip space normalization.
+- Replaces repaste rollback with bounded `Cmd+Z` recovery that stops on target or user changes and requires exact original-prompt verification.
+- Adds safe boundary, normalization, paste-event, and undo diagnostics plus long-prompt regression coverage.
 - Limits clipboard snapshots to 128 MiB, 32 items, and 128 representations before mutation and centralizes restoration across success and handled failures.
 - Restores helper-owned temporary clipboard state during cooperative `SIGTERM` and `SIGINT`, with a five-second helper grace period and a two-second Codex grace period.
 - Prevents duplicate termination escalation timers and preserves concurrent user clipboard changes.

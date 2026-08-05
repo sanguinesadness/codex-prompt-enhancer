@@ -118,13 +118,21 @@ The helper:
 1. snapshots the clipboard within the fixed safety limits;
 2. selects the composer text with `Cmd+A`;
 3. verifies the original serialized prompt;
-4. writes the replacement to the clipboard;
-5. pastes with `Cmd+V`;
-6. re-copies the composer to verify the serialized result;
-7. restores the clipboard;
-8. collapses the selection.
+4. validates a deterministic plan of at most 32 chunks, each no larger than 1,800 UTF-16 units and ending at an existing paragraph, line, or whitespace boundary;
+5. writes and pastes each chunk with `Cmd+V`;
+6. waits up to five seconds for each changed rendered accessibility value to stabilize;
+7. re-copies the complete composer and accepts exact serialized equality or one Cursor-added ASCII space immediately beside a reference chip where the expected text has no whitespace;
+8. issues at most one `Cmd+Z` per helper paste and verifies the exact original prompt if a partial replacement fails;
+9. restores the clipboard;
+10. collapses the selection.
 
 Using an actual paste is necessary for Cursor to reconstruct clickable inline references.
+
+Cursor may convert a sufficiently large single clipboard paste into a text-file attachment instead of inserting it into the composer. Bounded sequential paste prevents that behavior while retaining keyboard paste so clickable references are reconstructed. The planner never splits words, Unicode pairs, local references, Markdown links or images, autolinks, inline code, fenced code blocks, or paired emphasis and strikethrough spans. An indivisible structure over the chunk limit fails before the helper starts.
+
+After every paste the helper waits for the rendered accessibility value to stabilize and explicitly places the caret at the composer end. Canonical serialized verification remains authoritative. Reference-chip normalization is accepted only when the ordered raw references and all non-reference text remain identical and the sole differences are permitted single ASCII spaces next to reference tokens; line breaks and all other edits fail verification.
+
+Rollback never repastes the original. The helper records its own paste count and last rendered value, confirms that the same live focused AX element remains unchanged, and undoes only its own bounded paste events. It stops when the original rendered value returns and then requires an exact canonical serialized copy. Target changes and concurrent user edits suppress automatic undo.
 
 Clipboard operations run inside one transaction. The transaction tracks the helper-owned pasteboard change count and performs centralized cleanup after success, handled failure, timeout, or cooperative termination. If another application changes the clipboard, the newer change wins and restoration is skipped rather than overwritten.
 

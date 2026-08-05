@@ -544,6 +544,175 @@ test("detects clipboard ownership changes before mutation") {
     )
 }
 
+test("waits for a changed paste value to stabilize") {
+    var tracker = PasteApplicationTracker(
+        originalValue: "Original synthetic prompt",
+        requiredStableObservations: 3
+    )
+
+    expect(
+        !tracker.observe("Original synthetic prompt"),
+        "unchanged composer must not be treated as pasted"
+    )
+    expect(
+        !tracker.observe("Partial enhanced prompt"),
+        "first changed observation must wait"
+    )
+    expect(
+        !tracker.observe("Complete enhanced prompt"),
+        "new changed value must reset stability"
+    )
+    expect(
+        !tracker.observe("Complete enhanced prompt"),
+        "second stable observation must still wait"
+    )
+    expect(
+        tracker.observe("Complete enhanced prompt"),
+        "third stable changed observation should pass"
+    )
+    expect(
+        tracker.observedChange,
+        "changed value should be recorded"
+    )
+}
+
+test("handles long paste values without a length cutoff") {
+    let original = String(
+        repeating: "original ",
+        count: 20_000
+    )
+    let enhanced = String(
+        repeating: "enhanced ",
+        count: 30_000
+    )
+    var tracker = PasteApplicationTracker(
+        originalValue: original,
+        requiredStableObservations: 2
+    )
+
+    expect(
+        !tracker.observe(enhanced),
+        "first long observation should wait"
+    )
+    expect(
+        tracker.observe(enhanced),
+        "stable long observation should pass"
+    )
+}
+
+test("verifies exact and reference-space-normalized prompts") {
+    let expected = "Inspect[A](/synthetic/project/a.ts),then continue."
+    let exact = verifySerializedPrompt(
+        expected: expected,
+        actual: expected
+    )
+    let normalized = verifySerializedPrompt(
+        expected: expected,
+        actual: "Inspect [A](/synthetic/project/a.ts) ,then continue."
+    )
+
+    expect(
+        exact?.mode == .exact,
+        "exact serialized prompt should verify"
+    )
+    expect(
+        exact?.referenceWhitespaceNormalizationCount == 0,
+        "exact verification should not report normalization"
+    )
+    expect(
+        normalized?.mode == .referenceWhitespaceNormalized,
+        "one reference-adjacent space per side should verify"
+    )
+    expect(
+        normalized?.referenceWhitespaceNormalizationCount == 2,
+        "both allowed reference spaces should be counted"
+    )
+}
+
+test("verifies adjacent reference spacing narrowly") {
+    let expected = "[A](/synthetic/a.ts)[B](/synthetic/b.ts)"
+    let actual = "[A](/synthetic/a.ts)  [B](/synthetic/b.ts)"
+    let result = verifySerializedPrompt(
+        expected: expected,
+        actual: actual
+    )
+
+    expect(
+        result?.referenceWhitespaceNormalizationCount == 2,
+        "adjacent references may contribute one space per side"
+    )
+}
+
+test("rejects unsafe serialized prompt differences") {
+    let expected = "Inspect[A](/synthetic/a.ts),then[B](/synthetic/b.ts)."
+    let unsafeValues = [
+        "Inspect\n[A](/synthetic/a.ts),then[B](/synthetic/b.ts).",
+        "Inspect  [A](/synthetic/a.ts),then[B](/synthetic/b.ts).",
+        "Inspect\u{00A0}[A](/synthetic/a.ts),then[B](/synthetic/b.ts).",
+        "Inspect[A](/synthetic/a.ts),then changed[B](/synthetic/b.ts).",
+        "Inspect[B](/synthetic/b.ts),then[A](/synthetic/a.ts).",
+        "Inspect[A](/synthetic/a.ts),then.",
+        "Inspect  [A](/synthetic/a.ts),then[B](/synthetic/b.ts)."
+    ]
+
+    for actual in unsafeValues {
+        expect(
+            verifySerializedPrompt(
+                expected: expected,
+                actual: actual
+            ) == nil,
+            "unsafe serialized difference must be rejected"
+        )
+    }
+}
+
+test("tracks bounded undo operations") {
+    var tracker = PasteUndoTracker(
+        initialRenderedValue: "original"
+    )
+
+    expect(!tracker.canUndo, "no paste means no undo")
+    tracker.recordPasteEvent()
+    tracker.recordObservedRenderedValue("first")
+    tracker.recordPasteEvent()
+    tracker.recordObservedRenderedValue("second")
+
+    expect(
+        tracker.mayBeginRollback(
+            sameTarget: true,
+            currentRenderedValue: "second"
+        ),
+        "matching target and value should allow rollback"
+    )
+    expect(tracker.recordUndo(), "first undo should be allowed")
+    expect(tracker.recordUndo(), "second undo should be allowed")
+    expect(!tracker.recordUndo(), "undo count must not exceed paste count")
+    expect(tracker.undoCount == 2, "two undo operations should be recorded")
+}
+
+test("refuses undo after target or user changes") {
+    var tracker = PasteUndoTracker(
+        initialRenderedValue: "original"
+    )
+    tracker.recordPasteEvent()
+    tracker.recordObservedRenderedValue("enhanced")
+
+    expect(
+        !tracker.mayBeginRollback(
+            sameTarget: false,
+            currentRenderedValue: "enhanced"
+        ),
+        "changed target must suppress rollback"
+    )
+    expect(
+        !tracker.mayBeginRollback(
+            sameTarget: true,
+            currentRenderedValue: "user edit"
+        ),
+        "concurrent user edit must suppress rollback"
+    )
+}
+
 test("records the first cooperative termination request") {
     let state = TerminationRequestState()
 

@@ -211,6 +211,18 @@ The clipboard exceeds one of the fixed snapshot limits: 128 MiB total data, 32 i
 
 Copy a smaller item or clear the clipboard, then press **Cmd+Shift+R** again. Diagnostics report only counts and configured limits, not clipboard contents or type names.
 
+## `Cursor did not finish applying the enhanced prompt`
+
+Cursor converts sufficiently large single pastes into text-file attachments rather than inserting them into the prompt field. The extension avoids this with at most 32 structure-aware chunks of 1,800 UTF-16 units, preserved paragraph/line/whitespace boundaries, stabilization waits, and explicit caret placement.
+
+If a chunk is not applied or final canonical verification fails, the helper uses bounded `Cmd+Z` operations and requires an exact canonical copy of the original prompt before reporting successful rollback. Keep the composer focused and retry once. If it fails consistently, record the safe boundary kind, chunk count, verification mode, paste-event count, and undo diagnostics from the output channel; they contain no prompt contents.
+
+## `A Markdown structure is too large to paste safely`
+
+One indivisible reference, link, autolink, inline-code span, fenced code block, or paired emphasis span exceeds 1,800 UTF-16 units. The extension fails before invoking the helper or changing the composer. Shorten that structure or divide the request into separate prompts. The extension intentionally does not automate Cursor's version- and localization-sensitive **Show in text field** control.
+
+The same fail-closed behavior applies when a prose section has no safe paragraph, line, or whitespace boundary, or when a replacement would require more than 32 chunks.
+
 ## Progress remains forever
 
 The extension has two timeout layers:
